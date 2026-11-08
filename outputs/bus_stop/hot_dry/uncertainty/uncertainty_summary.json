@@ -1,0 +1,844 @@
+{
+  "samples": 128,
+  "seed": 2026,
+  "workers": 11,
+  "wall_s": 59.14897762500004,
+  "parameters": [
+    "physics.convection_a.value",
+    "physics.convection_b.value",
+    "comfort.solar_absorptance_body.value",
+    "tariffs.electricity.value",
+    "tariffs.water.value",
+    "device_presets.fan_system.airflow.value",
+    "device_presets.fan_system.covered_air_speed.value",
+    "device_presets.evaporative_cooler.airflow.value",
+    "device_presets.evaporative_cooler.saturation_effectiveness.value",
+    "device_presets.evaporative_cooler.covered_air_speed.value",
+    "device_presets.evaporative_cooler.plume_fraction.value",
+    "device_presets.evaporative_cooler.bleed_fraction.value",
+    "device_presets.large_evaporative_cooler.airflow.value",
+    "device_presets.large_evaporative_cooler.saturation_effectiveness.value",
+    "device_presets.large_evaporative_cooler.covered_air_speed.value",
+    "device_presets.large_evaporative_cooler.plume_fraction.value",
+    "device_presets.large_evaporative_cooler.bleed_fraction.value",
+    "sections[shelter].surfaces[roof].emissivity.value",
+    "sections[shelter].surfaces[roof].solar_absorptance_exterior.value",
+    "sections[shelter].surfaces[floor].solar_absorptance_interior.value",
+    "sections[shelter].surfaces[floor].deep_ground_temperature.value",
+    "sections[shelter].sun.open_side_fraction.value",
+    "sections[shelter].outdoor.wind_coefficient.value",
+    "sections[shelter].outdoor.min_flow.value",
+    "sections[shelter].outdoor.local_wind_factor.value",
+    "sections[shelter].occupancy.met.value",
+    "sections[shelter].occupancy.clo.value",
+    "sections[curb].surfaces[floor].solar_absorptance_interior.value",
+    "sections[curb].surfaces[floor].deep_ground_temperature.value",
+    "sections[curb].outdoor.wind_coefficient.value",
+    "sections[curb].outdoor.min_flow.value",
+    "sections[curb].outdoor.local_wind_factor.value",
+    "sections[curb].occupancy.met.value",
+    "sections[curb].occupancy.clo.value",
+    "connections[shelter_curb].wind_coefficient.value",
+    "connections[shelter_curb].min_flow.value",
+    "passive_options[cool_roof].set::sections[shelter].surfaces[roof].solar_absorptance_exterior.value",
+    "passive_options[shade_sail].set::sections[curb].sun.shade_multiplier.value"
+  ],
+  "scenarios": [
+    "A_fan",
+    "B_evap",
+    "C_large_evap"
+  ],
+  "results_csv": "/Users/ian/Desktop/Homework/COMAP/COMAP_Simulation/outputs/bus_stop/hot_dry/uncertainty/uncertainty_draws.csv",
+  "n_ok": 128,
+  "spearman_noise_level": 0.17747130188322277,
+  "outputs": {
+    "A_fan:relief_Kph": {
+      "mean": 22.495035496596834,
+      "p05": 8.129445090095679,
+      "p50": 19.297781329551345,
+      "p95": 49.626477206699754,
+      "n": 128,
+      "prob_negative": 0.0
+    },
+    "A_fan:attainment": {
+      "mean": 0.2952734858996755,
+      "p05": 0.2250916545230774,
+      "p50": 0.2909455473267597,
+      "p95": 0.3727226442500375,
+      "n": 128,
+      "prob_negative": null
+    },
+    "A_fan:electricity_kWh": {
+      "mean": 4.0,
+      "p05": 4.0,
+      "p50": 4.0,
+      "p95": 4.0,
+      "n": 128,
+      "prob_negative": null
+    },
+    "A_fan:relief_per_kWh": {
+      "mean": 5.623758874149209,
+      "p05": 2.0323612725239197,
+      "p50": 4.824445332387836,
+      "p95": 12.406619301674938,
+      "n": 128,
+      "prob_negative": null
+    },
+    "B_evap:relief_Kph": {
+      "mean": 86.63629972039962,
+      "p05": 59.23326651418803,
+      "p50": 86.21320802996705,
+      "p95": 114.68435325580079,
+      "n": 128,
+      "prob_negative": 0.0
+    },
+    "B_evap:attainment": {
+      "mean": 0.5023392117974422,
+      "p05": 0.3613215334368095,
+      "p50": 0.5123542583322929,
+      "p95": 0.633318820116918,
+      "n": 128,
+      "prob_negative": null
+    },
+    "B_evap:electricity_kWh": {
+      "mean": 19.199999999999996,
+      "p05": 19.2,
+      "p50": 19.2,
+      "p95": 19.2,
+      "n": 128,
+      "prob_negative": null
+    },
+    "B_evap:relief_per_kWh": {
+      "mean": 4.5123072771041475,
+      "p05": 3.0850659642806266,
+      "p50": 4.4902712515607845,
+      "p95": 5.973143398739624,
+      "n": 128,
+      "prob_negative": null
+    },
+    "C_large_evap:relief_Kph": {
+      "mean": 135.2030739786233,
+      "p05": 92.9922198033622,
+      "p50": 135.8046990806975,
+      "p95": 189.84443741388716,
+      "n": 128,
+      "prob_negative": 0.0
+    },
+    "C_large_evap:attainment": {
+      "mean": 0.6500013711705598,
+      "p05": 0.5508725645980688,
+      "p50": 0.657447313294935,
+      "p95": 0.7353908399517561,
+      "n": 128,
+      "prob_negative": null
+    },
+    "C_large_evap:electricity_kWh": {
+      "mean": 40.0,
+      "p05": 40.0,
+      "p50": 40.0,
+      "p95": 40.0,
+      "n": 128,
+      "prob_negative": null
+    },
+    "C_large_evap:relief_per_kWh": {
+      "mean": 3.380076849465582,
+      "p05": 2.324805495084055,
+      "p50": 3.395117477017437,
+      "p95": 4.746110935347179,
+      "n": 128,
+      "prob_negative": null
+    }
+  },
+  "sensitivity": {
+    "A_fan": [
+      {
+        "parameter": "sections[shelter].outdoor.local_wind_factor.value",
+        "spearman_rho": -0.8120536531770737,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "device_presets.fan_system.covered_air_speed.value",
+        "spearman_rho": 0.6220701336751511,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "sections[shelter].sun.open_side_fraction.value",
+        "spearman_rho": 0.2345209210767259,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "device_presets.evaporative_cooler.airflow.value",
+        "spearman_rho": -0.16541727705548434,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].surfaces[roof].emissivity.value",
+        "spearman_rho": -0.15007553561618753,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].surfaces[floor].solar_absorptance_interior.value",
+        "spearman_rho": -0.1380813953488372,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "connections[shelter_curb].wind_coefficient.value",
+        "spearman_rho": 0.1294863578099249,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.evaporative_cooler.covered_air_speed.value",
+        "spearman_rho": -0.12310016480498076,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].outdoor.local_wind_factor.value",
+        "spearman_rho": 0.11473974546786303,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].outdoor.min_flow.value",
+        "spearman_rho": -0.11432201062076541,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "comfort.solar_absorptance_body.value",
+        "spearman_rho": 0.1064136605017396,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.evaporative_cooler.plume_fraction.value",
+        "spearman_rho": 0.10256821095037538,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "passive_options[cool_roof].set::sections[shelter].surfaces[roof].solar_absorptance_exterior.value",
+        "spearman_rho": 0.1015439022157114,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].occupancy.met.value",
+        "spearman_rho": -0.09137520600622596,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].surfaces[floor].deep_ground_temperature.value",
+        "spearman_rho": 0.08884018494781175,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].surfaces[roof].solar_absorptance_exterior.value",
+        "spearman_rho": 0.08708913202710125,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].occupancy.clo.value",
+        "spearman_rho": 0.08208775865226149,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.large_evaporative_cooler.covered_air_speed.value",
+        "spearman_rho": -0.07302920710492584,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "passive_options[shade_sail].set::sections[curb].sun.shade_multiplier.value",
+        "spearman_rho": -0.06482901483244827,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].surfaces[floor].solar_absorptance_interior.value",
+        "spearman_rho": 0.05894639260208753,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].outdoor.wind_coefficient.value",
+        "spearman_rho": -0.05767029848013184,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.evaporative_cooler.bleed_fraction.value",
+        "spearman_rho": 0.05570179454312396,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].occupancy.met.value",
+        "spearman_rho": -0.05566173777696393,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].outdoor.min_flow.value",
+        "spearman_rho": 0.054975050357077455,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].surfaces[floor].deep_ground_temperature.value",
+        "spearman_rho": -0.053401391686504304,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.evaporative_cooler.saturation_effectiveness.value",
+        "spearman_rho": 0.05225691265336018,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "physics.convection_b.value",
+        "spearman_rho": 0.04816540010986998,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.large_evaporative_cooler.saturation_effectiveness.value",
+        "spearman_rho": 0.04425700421168284,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "tariffs.electricity.value",
+        "spearman_rho": -0.043015244460721476,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.fan_system.airflow.value",
+        "spearman_rho": -0.042660455960446805,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "connections[shelter_curb].min_flow.value",
+        "spearman_rho": -0.03863188976377953,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].outdoor.wind_coefficient.value",
+        "spearman_rho": -0.027312992125984252,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.large_evaporative_cooler.airflow.value",
+        "spearman_rho": -0.026941036440212413,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.large_evaporative_cooler.plume_fraction.value",
+        "spearman_rho": 0.024165674784837943,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "tariffs.water.value",
+        "spearman_rho": 0.023227201977659765,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].occupancy.clo.value",
+        "spearman_rho": -0.02193394067020692,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "physics.convection_a.value",
+        "spearman_rho": 0.012320316791796375,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.large_evaporative_cooler.bleed_fraction.value",
+        "spearman_rho": 0.0056823383995605195,
+        "unused_by_scenario": true,
+        "above_noise": false
+      }
+    ],
+    "B_evap": [
+      {
+        "parameter": "sections[shelter].outdoor.local_wind_factor.value",
+        "spearman_rho": -0.4136891137154367,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "sections[shelter].sun.open_side_fraction.value",
+        "spearman_rho": 0.37993270463285117,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "sections[shelter].outdoor.wind_coefficient.value",
+        "spearman_rho": -0.3636925471525361,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "sections[shelter].occupancy.clo.value",
+        "spearman_rho": 0.35946941952023437,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "device_presets.evaporative_cooler.plume_fraction.value",
+        "spearman_rho": 0.34266274491851306,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "device_presets.evaporative_cooler.saturation_effectiveness.value",
+        "spearman_rho": 0.2754932704632851,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "physics.convection_b.value",
+        "spearman_rho": -0.23220335103460904,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "passive_options[cool_roof].set::sections[shelter].surfaces[roof].solar_absorptance_exterior.value",
+        "spearman_rho": 0.2025556216810108,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.evaporative_cooler.covered_air_speed.value",
+        "spearman_rho": 0.18298503021424647,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "device_presets.evaporative_cooler.airflow.value",
+        "spearman_rho": 0.17988921442959163,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "sections[shelter].surfaces[roof].solar_absorptance_exterior.value",
+        "spearman_rho": 0.1575032045412928,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "connections[shelter_curb].min_flow.value",
+        "spearman_rho": -0.15183231093206373,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].occupancy.clo.value",
+        "spearman_rho": 0.12017029848013186,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].surfaces[floor].solar_absorptance_interior.value",
+        "spearman_rho": -0.11477980223402305,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].surfaces[floor].deep_ground_temperature.value",
+        "spearman_rho": -0.11471685588720014,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "connections[shelter_curb].wind_coefficient.value",
+        "spearman_rho": -0.11279985350668374,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].surfaces[floor].solar_absorptance_interior.value",
+        "spearman_rho": 0.09935794726240615,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].outdoor.wind_coefficient.value",
+        "spearman_rho": -0.09927783373008606,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.fan_system.covered_air_speed.value",
+        "spearman_rho": 0.08012497711041933,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].occupancy.met.value",
+        "spearman_rho": -0.07864859915766342,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "physics.convection_a.value",
+        "spearman_rho": -0.06451428309833362,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].surfaces[roof].emissivity.value",
+        "spearman_rho": 0.056989333455411094,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].outdoor.min_flow.value",
+        "spearman_rho": -0.052171076725874385,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].occupancy.met.value",
+        "spearman_rho": -0.04953877494964293,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.large_evaporative_cooler.airflow.value",
+        "spearman_rho": -0.04937282548983702,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].outdoor.local_wind_factor.value",
+        "spearman_rho": -0.044943691631569305,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.large_evaporative_cooler.plume_fraction.value",
+        "spearman_rho": 0.04392510529207105,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].surfaces[floor].deep_ground_temperature.value",
+        "spearman_rho": -0.0434673136788134,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.fan_system.airflow.value",
+        "spearman_rho": 0.03955891778062626,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.large_evaporative_cooler.bleed_fraction.value",
+        "spearman_rho": 0.03237731184764695,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.large_evaporative_cooler.covered_air_speed.value",
+        "spearman_rho": 0.031719236403589084,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "tariffs.water.value",
+        "spearman_rho": -0.02506409082585607,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.large_evaporative_cooler.saturation_effectiveness.value",
+        "spearman_rho": 0.020566288225599704,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "comfort.solar_absorptance_body.value",
+        "spearman_rho": 0.016051318439846182,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "passive_options[shade_sail].set::sections[curb].sun.shade_multiplier.value",
+        "spearman_rho": -0.010637932613074528,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.evaporative_cooler.bleed_fraction.value",
+        "spearman_rho": 0.007605063175242629,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "tariffs.electricity.value",
+        "spearman_rho": 0.0071243819813221025,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].outdoor.min_flow.value",
+        "spearman_rho": 0.0037424464383812484,
+        "unused_by_scenario": false,
+        "above_noise": false
+      }
+    ],
+    "C_large_evap": [
+      {
+        "parameter": "sections[shelter].sun.open_side_fraction.value",
+        "spearman_rho": 0.6001648049807727,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "sections[shelter].outdoor.local_wind_factor.value",
+        "spearman_rho": -0.4802691814685955,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "sections[shelter].occupancy.clo.value",
+        "spearman_rho": 0.2934673136788134,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "device_presets.large_evaporative_cooler.covered_air_speed.value",
+        "spearman_rho": 0.24367675334187877,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "device_presets.large_evaporative_cooler.saturation_effectiveness.value",
+        "spearman_rho": 0.20218366599523896,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "device_presets.large_evaporative_cooler.plume_fraction.value",
+        "spearman_rho": 0.1874427760483428,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "sections[shelter].outdoor.wind_coefficient.value",
+        "spearman_rho": -0.17899652078373923,
+        "unused_by_scenario": false,
+        "above_noise": true
+      },
+      {
+        "parameter": "device_presets.fan_system.covered_air_speed.value",
+        "spearman_rho": 0.16181216810108037,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].outdoor.min_flow.value",
+        "spearman_rho": -0.14459348104742722,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.large_evaporative_cooler.airflow.value",
+        "spearman_rho": 0.14379806811939205,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.evaporative_cooler.plume_fraction.value",
+        "spearman_rho": 0.12830182201062076,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].surfaces[roof].solar_absorptance_exterior.value",
+        "spearman_rho": 0.10970403772202894,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "physics.convection_b.value",
+        "spearman_rho": -0.10286577549899285,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "passive_options[shade_sail].set::sections[curb].sun.shade_multiplier.value",
+        "spearman_rho": -0.10169268449002014,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.large_evaporative_cooler.bleed_fraction.value",
+        "spearman_rho": 0.08736952939022156,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].surfaces[floor].solar_absorptance_interior.value",
+        "spearman_rho": -0.08323796008057131,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.evaporative_cooler.airflow.value",
+        "spearman_rho": -0.08296328511261672,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].surfaces[roof].emissivity.value",
+        "spearman_rho": -0.07962712873100165,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "passive_options[cool_roof].set::sections[shelter].surfaces[roof].solar_absorptance_exterior.value",
+        "spearman_rho": 0.07479742721113349,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.evaporative_cooler.covered_air_speed.value",
+        "spearman_rho": -0.05999931331258011,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "connections[shelter_curb].min_flow.value",
+        "spearman_rho": -0.058482878593664155,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].surfaces[floor].deep_ground_temperature.value",
+        "spearman_rho": -0.054362754074345356,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].occupancy.clo.value",
+        "spearman_rho": 0.04687213880241714,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "tariffs.electricity.value",
+        "spearman_rho": 0.046477293535982414,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.evaporative_cooler.saturation_effectiveness.value",
+        "spearman_rho": -0.044897912470243544,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].surfaces[floor].deep_ground_temperature.value",
+        "spearman_rho": -0.043885048525911,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "comfort.solar_absorptance_body.value",
+        "spearman_rho": 0.04308391320271013,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].outdoor.wind_coefficient.value",
+        "spearman_rho": 0.03871772569126534,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].surfaces[floor].solar_absorptance_interior.value",
+        "spearman_rho": 0.03739585240798389,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].outdoor.local_wind_factor.value",
+        "spearman_rho": 0.03674349935909174,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "tariffs.water.value",
+        "spearman_rho": 0.027576222303607397,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].occupancy.met.value",
+        "spearman_rho": -0.018449002014283098,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.evaporative_cooler.bleed_fraction.value",
+        "spearman_rho": 0.016972624061527195,
+        "unused_by_scenario": true,
+        "above_noise": false
+      },
+      {
+        "parameter": "physics.convection_a.value",
+        "spearman_rho": -0.015851034609045963,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "connections[shelter_curb].wind_coefficient.value",
+        "spearman_rho": 0.015570637245925653,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[shelter].occupancy.met.value",
+        "spearman_rho": 0.011347509613623878,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "sections[curb].outdoor.min_flow.value",
+        "spearman_rho": -0.006872596594030397,
+        "unused_by_scenario": false,
+        "above_noise": false
+      },
+      {
+        "parameter": "device_presets.fan_system.airflow.value",
+        "spearman_rho": 2.8611975828602816e-05,
+        "unused_by_scenario": true,
+        "above_noise": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,59 @@
+# Shared physics constants, materials and comfort settings for the VenueCool examples.
+# Every influential value carries a unit, a provenance string and (where uncertain) bounds.
+# "DEMO-ASSUMPTION" marks values chosen for demonstration in the absence of site data.
+
+physics:
+  convection_a: {value: 5.7, unit: "W/(m2*K)", source: "McAdams-type flat-plate correlation h = a + b*v (ASHRAE Fundamentals Ch.4 style); simplified", bounds: [4.0, 7.5]}
+  convection_b: {value: 3.8, unit: "W*s/(m3*K)", source: "McAdams-type flat-plate correlation h = a + b*v; simplified", bounds: [2.5, 4.5]}
+  still_air_speed: {value: 0.1, unit: "m/s", source: "minimum occupant-level air speed (natural convection floor), ASHRAE 55 'still air'"}
+  body_surface_area: {value: 1.8, unit: "m2", source: "DuBois area of a reference adult (ASHRAE 55)"}
+  occupant_sensible_fraction: [[20, 0.72], [24, 0.62], [26, 0.55], [28, 0.48], [30, 0.40], [32, 0.30], [34, 0.20], [36, 0.10], [40, 0.05]]
+  occupant_sensible_fraction_source: >-
+    DEMO-ASSUMPTION following the trend of ASHRAE Fundamentals Ch.18 sensible/latent split for
+    lightly active adults (latent share rises with air temperature); the total heat added to air
+    is always the metabolic rate so energy is counted once.
+
+comfort:
+  index: SET
+  target: {value: 30.0, unit: "degC", source: "DEMO-ASSUMPTION: SET 30 C ~ boundary between 'slightly warm' and 'warm' (Gagge et al. 1986); configurable"}
+  decision_basis: extended
+  poorly_served_attainment: 0.8
+  solar_absorptance_body: {value: 0.7, unit: "-", source: "ASHRAE 55-2023 Appendix C default short-wave absorptivity (medium skin/clothing)", bounds: [0.6, 0.8]}
+
+materials:
+  concrete:
+    conductivity: {value: 1.4, unit: "W/(m*K)", source: "ASHRAE Fundamentals Ch.33 typical normal-weight concrete"}
+    density: {value: 2300, unit: "kg/m3", source: "ASHRAE Fundamentals Ch.33"}
+    specific_heat: {value: 880, unit: "J/(kg*K)", source: "ASHRAE Fundamentals Ch.33"}
+  asphalt:
+    conductivity: {value: 0.75, unit: "W/(m*K)", source: "typical asphalt pavement literature value"}
+    density: {value: 2300, unit: "kg/m3", source: "typical asphalt pavement"}
+    specific_heat: {value: 920, unit: "J/(kg*K)", source: "typical asphalt pavement"}
+  steel_sheet:
+    conductivity: {value: 45, unit: "W/(m*K)", source: "carbon steel handbook value"}
+    density: {value: 7850, unit: "kg/m3", source: "carbon steel"}
+    specific_heat: {value: 500, unit: "J/(kg*K)", source: "carbon steel"}
+  polycarbonate:
+    conductivity: {value: 0.2, unit: "W/(m*K)", source: "manufacturer-typical solid polycarbonate"}
+    density: {value: 1200, unit: "kg/m3", source: "solid polycarbonate"}
+    specific_heat: {value: 1200, unit: "J/(kg*K)", source: "solid polycarbonate"}
+  glass:
+    conductivity: {value: 1.0, unit: "W/(m*K)", source: "soda-lime glass"}
+    density: {value: 2500, unit: "kg/m3", source: "soda-lime glass"}
+    specific_heat: {value: 840, unit: "J/(kg*K)", source: "soda-lime glass"}
+  brick:
+    conductivity: {value: 0.7, unit: "W/(m*K)", source: "ASHRAE Fundamentals Ch.33 common brick"}
+    density: {value: 1800, unit: "kg/m3", source: "common brick"}
+    specific_heat: {value: 840, unit: "J/(kg*K)", source: "common brick"}
+  fabric_membrane:
+    conductivity: {value: 0.2, unit: "W/(m*K)", source: "PTFE/PVC tensile membrane typical"}
+    density: {value: 1400, unit: "kg/m3", source: "PTFE/PVC tensile membrane typical"}
+    specific_heat: {value: 1000, unit: "J/(kg*K)", source: "PTFE/PVC tensile membrane typical"}
+
+tariffs:
+  electricity: {value: 0.15, unit: "USD/kWh", source: "DEMO-ASSUMPTION: commercial off-peak tariff", bounds: [0.10, 0.25]}
+  time_of_use:
+    - {start_h: 14, end_h: 19, price: {value: 0.25, unit: "USD/kWh", source: "DEMO-ASSUMPTION: summer on-peak"}}
+  water: {value: 2.5, unit: "USD/m3", source: "DEMO-ASSUMPTION: combined water + sewer charge", bounds: [1.5, 5.0]}
+  discount_rate: {value: 0.05, unit: "1/year", source: "DEMO-ASSUMPTION: public-sector real discount rate"}
+  season_days: {value: 120, unit: "day", source: "DEMO-ASSUMPTION: each simulated design day stands for one of 120 hot-season days"}

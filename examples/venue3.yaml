@@ -1,0 +1,164 @@
+# Example 3 - synthetic three-section open-air venue (requirement 3: does the model scale?).
+# SYNTHETIC DEMONSTRATION: an amphitheatre-like venue with roofed seating, a sunny entry plaza and
+# a partially enclosed concourse. Adds a venue-scale fan preset (HVLS ceiling fan, labelled
+# assumption) because the 0.25 kW bus-stop fan cannot cover a 150 m2 seating zone.
+include: [common/physics_materials.yaml, common/devices.yaml, common/templates.yaml]
+
+meta:
+  name: "Synthetic three-section venue"
+  description: "Roofed open seating (600 m2), sunny entry plaza (500 m2), partially enclosed concourse (320 m2)."
+  data_status: SYNTHETIC_DEMONSTRATION
+  notes:
+    - "Each exposure group is sized for one unit's coverage, so the search chooses placement as well as type."
+    - "evap_gate_shared serves seating zone_4 and the concourse gate end (one ledger, airflow split 50/50)."
+
+site: {latitude_deg: 33.45, longitude_deg: -112.07, utc_offset_h: -7, day_of_year: 196}
+weather: {file: data/weather_hot_dry.csv}
+occupancy: {file: data/occupancy_venue3.csv}
+simulation: {start_h: 0, end_h: 24, warmup_days: 2, output_step_s: 300}
+
+device_presets:
+  hvls_fan:
+    kind: fan
+    label: "HVLS ceiling fan (venue preset)"
+    claim: "DEMO-ASSUMPTION preset, not from the problem statement"
+    electric_power: {value: 1.5, unit: "kW", source: "DEMO-ASSUMPTION: 7 m high-volume low-speed fan, typical catalogue range 1-2 kW"}
+    airflow: {value: 25.0, unit: "m3/s", source: "DEMO-ASSUMPTION: catalogue-typical for 7 m HVLS fan", bounds: [15.0, 35.0]}
+    covered_air_speed: {value: 1.2, unit: "m/s", source: "DEMO-ASSUMPTION: mean speed in ~150 m2 coverage zone", bounds: [0.8, 1.6]}
+    capital_cost: {value: 9000, unit: "USD", source: "DEMO-ASSUMPTION: installed"}
+    lifetime: {value: 15, unit: "year", source: "DEMO-ASSUMPTION"}
+    maintenance: {value: 150, unit: "USD/year", source: "DEMO-ASSUMPTION"}
+    default_intake: recirculate
+
+sections:
+  - id: seating
+    name: "Roofed open seating"
+    template: roofed_open_seating
+    footprint: [[0, 0], [30, 0], [30, 20], [0, 20]]
+    height_m: 8.0
+    sun: {mode: canopy, canopy_height_m: 8.0, canopy_depth_m: 20.0,
+          open_side_fraction: {value: 0.6, unit: "-", source: "DEMO-ASSUMPTION: stage side and one flank open", bounds: [0.4, 0.8]}}
+    outdoor:
+      opening_area_m2: 300.0
+      wind_coefficient: {value: 0.05, unit: "-", source: "DEMO-ASSUMPTION: large bowl, partly sheltered", bounds: [0.02, 0.1]}
+      min_flow: {value: 10.0, unit: "m3/s", source: "DEMO-ASSUMPTION: crowd-plume driven exchange floor", bounds: [5.0, 20.0]}
+    exposure_groups:
+      - {id: zone_1, occupant_share: 0.25}
+      - {id: zone_2, occupant_share: 0.25}
+      - {id: zone_3, occupant_share: 0.25}
+      - {id: zone_4, occupant_share: 0.25}
+
+  - id: plaza
+    name: "Sunny entry plaza"
+    template: sunny_open_space
+    footprint: [[0, -20], [25, -20], [25, 0], [0, 0]]
+    height_m: 3.0
+    outdoor:
+      opening_area_m2: 150.0
+    exposure_groups:
+      - {id: queue, occupant_share: 0.4}
+      - {id: open_area, occupant_share: 0.6}
+
+  - id: concourse
+    name: "Partially enclosed concourse"
+    template: partially_enclosed_waiting
+    footprint: [[30, 0], [38, 0], [38, 40], [30, 40]]
+    height_m: 5.0
+    surfaces:
+      - id: east_wall
+        kind: wall
+        material: concrete
+        thickness: {value: 0.2, unit: "m", source: "DEMO-ASSUMPTION"}
+        nodes: 2
+        area_m2: 200.0
+        azimuth_deg: 90
+        emissivity: {value: 0.9, unit: "-", source: "concrete"}
+        solar_absorptance_exterior: {value: 0.6, unit: "-", source: "DEMO-ASSUMPTION: painted concrete", bounds: [0.45, 0.75]}
+        exterior_sky_fraction: 0.5
+    outdoor:
+      opening_area_m2: 60.0
+      wind_coefficient: {value: 0.05, unit: "-", source: "DEMO-ASSUMPTION: gates and vents", bounds: [0.02, 0.1]}
+      min_flow: {value: 3.0, unit: "m3/s", source: "DEMO-ASSUMPTION", bounds: [1.5, 6.0]}
+    exposure_groups:
+      - {id: gate_end, occupant_share: 0.3}
+      - {id: stalls, occupant_share: 0.4}
+      - {id: corridor, occupant_share: 0.3}
+
+connections:
+  - id: seating_plaza
+    a: seating
+    b: plaza
+    opening_area_m2: 100.0
+    wind_coefficient: {value: 0.05, unit: "-", source: "DEMO-ASSUMPTION", bounds: [0.02, 0.1]}
+    min_flow: {value: 4.0, unit: "m3/s", source: "DEMO-ASSUMPTION", bounds: [2.0, 8.0]}
+  - id: seating_concourse
+    a: seating
+    b: concourse
+    opening_area_m2: 60.0
+    wind_coefficient: {value: 0.03, unit: "-", source: "DEMO-ASSUMPTION: vomitories", bounds: [0.01, 0.06]}
+    min_flow: {value: 2.0, unit: "m3/s", source: "DEMO-ASSUMPTION", bounds: [1.0, 4.0]}
+  - id: plaza_concourse
+    a: plaza
+    b: concourse
+    opening_area_m2: 30.0
+    wind_coefficient: {value: 0.03, unit: "-", source: "DEMO-ASSUMPTION: entry gates", bounds: [0.01, 0.06]}
+    min_flow: {value: 1.0, unit: "m3/s", source: "DEMO-ASSUMPTION", bounds: [0.5, 2.0]}
+
+devices:
+  - {id: hvls_z1, preset: hvls_fan, serves: [{section: seating, airflow_fraction: 1.0, groups: [zone_1]}], schedule: service_hours}
+  - {id: hvls_z2, preset: hvls_fan, serves: [{section: seating, airflow_fraction: 1.0, groups: [zone_2]}], schedule: service_hours}
+  - {id: hvls_z3, preset: hvls_fan, serves: [{section: seating, airflow_fraction: 1.0, groups: [zone_3]}], schedule: service_hours}
+  - {id: evap_stalls, preset: large_evaporative_cooler, serves: [{section: concourse, airflow_fraction: 1.0, groups: [stalls]}], schedule: service_hours}
+  - id: evap_gate_shared
+    preset: large_evaporative_cooler
+    schedule: service_hours
+    serves:
+      - {section: seating, airflow_fraction: 0.5, groups: [zone_4]}
+      - {section: concourse, airflow_fraction: 0.5, groups: [gate_end]}
+  - {id: evap_queue, preset: evaporative_cooler, serves: [{section: plaza, airflow_fraction: 1.0, groups: [queue]}], schedule: service_hours}
+
+passive_options:
+  - id: cool_roof_seating
+    description: "Reflective coating on the seating roof"
+    set: {"sections[seating].surfaces[roof].solar_absorptance_exterior": {value: 0.3, unit: "-", source: "DEMO-ASSUMPTION: aged white coating", bounds: [0.2, 0.4]}}
+    capital_cost: {value: 12000, unit: "USD", source: "DEMO-ASSUMPTION: 660 m2 coating"}
+    lifetime: {value: 6, unit: "year", source: "DEMO-ASSUMPTION"}
+    maintenance: {value: 300, unit: "USD/year", source: "DEMO-ASSUMPTION"}
+  - id: plaza_shade
+    description: "Tensile shade canopy over the plaza"
+    set: {"sections[plaza].sun.shade_multiplier": {value: 0.35, unit: "-", source: "DEMO-ASSUMPTION: tensile membrane, 65% beam blocked", bounds: [0.25, 0.5]}}
+    capital_cost: {value: 30000, unit: "USD", source: "DEMO-ASSUMPTION: 500 m2 tensile canopy"}
+    lifetime: {value: 15, unit: "year", source: "DEMO-ASSUMPTION"}
+    maintenance: {value: 600, unit: "USD/year", source: "DEMO-ASSUMPTION"}
+
+scenarios:
+  - {id: baseline}
+  - {id: hvls_fans, description: "Three HVLS fans over seating zones 1-3", devices: [hvls_z1, hvls_z2, hvls_z3]}
+  - {id: evap_concourse_shared, description: "Large coolers: concourse stalls + shared gate unit", devices: [evap_stalls, evap_gate_shared]}
+  - {id: full_mix, description: "Fans + coolers + plaza queue cooler", devices: [hvls_z1, hvls_z2, hvls_z3, evap_stalls, evap_gate_shared, evap_queue]}
+  - {id: plaza_shade_only, description: "Passive plaza shade", passive: [plaza_shade]}
+  - {id: full_mix_shade, description: "Full mix + plaza shade + cool roof", devices: [hvls_z1, hvls_z2, hvls_z3, evap_stalls, evap_gate_shared, evap_queue], passive: [plaza_shade, cool_roof_seating]}
+
+search:
+  objective: energy
+  target: {min_attainment: 0.6, min_section_attainment: 0.3, max_unassessed_fraction: 0.05}
+  constraints: {max_devices: 6, max_investment_usd: 80000, max_water_m3_per_day: 10.0}
+  slots:
+    - {id: seat_z1, serves: [{section: seating, airflow_fraction: 1.0, groups: [zone_1]}], options: [none, hvls_fan, large_evaporative_cooler]}
+    - {id: seat_z2, serves: [{section: seating, airflow_fraction: 1.0, groups: [zone_2]}], options: [none, hvls_fan, large_evaporative_cooler]}
+    - {id: seat_z3, serves: [{section: seating, airflow_fraction: 1.0, groups: [zone_3]}], options: [none, hvls_fan]}
+    - {id: conc_stalls, serves: [{section: concourse, airflow_fraction: 1.0, groups: [stalls]}], options: [none, evaporative_cooler, large_evaporative_cooler]}
+    - {id: conc_corridor, serves: [{section: concourse, airflow_fraction: 1.0, groups: [corridor]}], options: [none, fan_system, evaporative_cooler]}
+    - id: gate_shared
+      serves: [{section: seating, airflow_fraction: 0.5, groups: [zone_4]}, {section: concourse, airflow_fraction: 0.5, groups: [gate_end]}]
+      options: [none, large_evaporative_cooler]
+    - {id: plaza_queue, serves: [{section: plaza, airflow_fraction: 1.0, groups: [queue]}], options: [none, evaporative_cooler, large_evaporative_cooler]}
+  schedules: [service_hours, peak_afternoon, occupied_hot]
+  passive_options: [cool_roof_seating, plaza_shade]
+  max_configurations: 20000
+
+uncertainty:
+  samples: 96
+  seed: 2026
+  parameters: all
+  scenarios: [hvls_fans, evap_concourse_shared, full_mix]

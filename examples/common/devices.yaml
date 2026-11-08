@@ -1,0 +1,56 @@
+# Cooling-device presets. Electrical draw is the SUPPLIED value from the problem statement.
+# The quoted effects ("feels up to 3 C cooler", "lowers air temperature up to 5 C / 8 C") are
+# conditional performance claims; they do not fix airflow or coverage. Airflow, coverage speed,
+# saturation effectiveness and plume fraction are DEMO-ASSUMPTIONS with bounds, checked against
+# the claims by `venuecool calibrate` (see docs/MODEL.md).
+
+device_presets:
+  fan_system:
+    kind: fan
+    label: "A. Fan system"
+    claim: "Makes space feel up to 3 C cooler (supplied claim, conditional)"
+    electric_power: {value: 0.25, unit: "kW", source: "SUPPLIED: problem statement table"}
+    airflow: {value: 2.5, unit: "m3/s", source: "DEMO-ASSUMPTION: two ~0.6 m pedestal/wall fans, ~4500 m3/h each", bounds: [1.5, 3.5]}
+    covered_air_speed: {value: 1.3, unit: "m/s", source: "DEMO-ASSUMPTION: mean occupant-level jet speed in covered zone; chosen so the SET reduction at the warm_moderate reference (32 C, 40% RH, still air 0.2 m/s) is ~3 K (`venuecool calibrate`)", bounds: [0.8, 1.8]}
+    plume_fraction: {value: 0.0, unit: "-", source: "fan delivers section air (no process); local air = section air"}
+    capital_cost: {value: 600, unit: "USD", source: "DEMO-ASSUMPTION: installed outdoor-rated fans"}
+    lifetime: {value: 8, unit: "year", source: "DEMO-ASSUMPTION"}
+    maintenance: {value: 40, unit: "USD/year", source: "DEMO-ASSUMPTION"}
+    default_intake: recirculate
+
+  evaporative_cooler:
+    kind: evaporative
+    label: "B. Evaporative cooler"
+    claim: "Lowers air temperature up to 5 C (supplied claim, conditional on dry air)"
+    electric_power: {value: 1.2, unit: "kW", source: "SUPPLIED: problem statement table"}
+    airflow: {value: 3.0, unit: "m3/s", source: "DEMO-ASSUMPTION: portable direct evaporative unit ~11000 m3/h", bounds: [2.0, 4.0]}
+    saturation_effectiveness: {value: 0.75, unit: "-", source: "DEMO-ASSUMPTION: 100 mm cellulose media at rated face velocity", bounds: [0.6, 0.85]}
+    covered_air_speed: {value: 1.0, unit: "m/s", source: "DEMO-ASSUMPTION: supply-jet speed at occupants in covered zone", bounds: [0.6, 1.5]}
+    plume_fraction: {value: 0.25, unit: "-", source: "DEMO-ASSUMPTION: share of supply air in the air breathed in the covered zone (replace with CFD/measurement)", bounds: [0.1, 0.45]}
+    bleed_fraction: {value: 0.15, unit: "-", source: "DEMO-ASSUMPTION: bleed-off water per unit evaporated", bounds: [0.05, 0.3]}
+    capital_cost: {value: 2500, unit: "USD", source: "DEMO-ASSUMPTION: installed with water connection"}
+    lifetime: {value: 7, unit: "year", source: "DEMO-ASSUMPTION"}
+    maintenance: {value: 250, unit: "USD/year", source: "DEMO-ASSUMPTION: pads + cleaning"}
+    default_intake: outdoor
+
+  large_evaporative_cooler:
+    kind: evaporative
+    label: "C. Large evaporative cooler"
+    claim: "Lowers air temperature up to 8 C (supplied claim, conditional on dry air)"
+    electric_power: {value: 2.5, unit: "kW", source: "SUPPLIED: problem statement table"}
+    airflow: {value: 6.0, unit: "m3/s", source: "DEMO-ASSUMPTION: large ducted/portable unit ~22000 m3/h", bounds: [4.5, 8.0]}
+    saturation_effectiveness: {value: 0.82, unit: "-", source: "DEMO-ASSUMPTION: 150-200 mm rigid media", bounds: [0.7, 0.9]}
+    covered_air_speed: {value: 1.3, unit: "m/s", source: "DEMO-ASSUMPTION", bounds: [0.8, 1.8]}
+    plume_fraction: {value: 0.35, unit: "-", source: "DEMO-ASSUMPTION: larger jet, larger share of supply air in the covered zone", bounds: [0.15, 0.55]}
+    bleed_fraction: {value: 0.15, unit: "-", source: "DEMO-ASSUMPTION", bounds: [0.05, 0.3]}
+    capital_cost: {value: 5000, unit: "USD", source: "DEMO-ASSUMPTION"}
+    lifetime: {value: 8, unit: "year", source: "DEMO-ASSUMPTION"}
+    maintenance: {value: 400, unit: "USD/year", source: "DEMO-ASSUMPTION"}
+    default_intake: outdoor
+
+schedules:
+  always: {mode: always}
+  service_hours: {mode: hours, intervals: [[6, 22]]}
+  peak_afternoon: {mode: hours, intervals: [[11, 19]]}
+  occupied_hot: {mode: occupied_hot, outdoor_threshold: {value: 30, unit: "degC", source: "DEMO-ASSUMPTION: run when people present and outdoor air >= 30 C"}}
+  occupied_very_hot: {mode: occupied_hot, outdoor_threshold: {value: 33, unit: "degC", source: "DEMO-ASSUMPTION: run when people present and outdoor air >= 33 C"}}

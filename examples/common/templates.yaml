@@ -1,0 +1,104 @@
+# Reusable section templates. A section that names a template receives a deep copy, then its
+# own entries override/extend it (lists of objects merge by id). Sections keep their own
+# identity, geometry, occupancy, devices and state.
+
+templates:
+  roofed_open_seating:
+    description: "Roof over seating, open sides; air exchange dominated by wind through open sides"
+    volume_factor: {value: 1.0, unit: "-", source: "open structure: full geometric volume participates"}
+    surfaces:
+      - id: roof
+        kind: roof
+        material: steel_sheet
+        thickness: {value: 2, unit: "mm", source: "DEMO-ASSUMPTION: profiled steel roof"}
+        nodes: 1
+        area_fraction: 1.1
+        emissivity: {value: 0.85, unit: "-", source: "painted metal (typical)", bounds: [0.7, 0.9]}
+        solar_absorptance_exterior: {value: 0.7, unit: "-", source: "DEMO-ASSUMPTION: mid-grey painted roof", bounds: [0.55, 0.85]}
+        exterior_sky_fraction: 1.0
+      - id: floor
+        kind: floor
+        material: concrete
+        thickness: {value: 0.15, unit: "m", source: "DEMO-ASSUMPTION: slab top layer modelled with 2 nodes"}
+        nodes: 2
+        emissivity: {value: 0.92, unit: "-", source: "concrete (typical)"}
+        solar_absorptance_interior: {value: 0.65, unit: "-", source: "aged grey concrete (typical)", bounds: [0.55, 0.75]}
+        deep_ground_temperature: {value: 28.0, unit: "degC", source: "DEMO-ASSUMPTION: ~annual-mean ground at ~0.5 m in a hot climate", bounds: [24.0, 32.0]}
+        ground_conductance: {value: 2.0, unit: "W/(m2*K)", source: "DEMO-ASSUMPTION: soil k~1 W/mK over ~0.5 m"}
+    sun: {mode: canopy, canopy_height_m: 3.0, canopy_depth_m: 4.0,
+          open_side_fraction: {value: 0.5, unit: "-", source: "DEMO-ASSUMPTION: one long side open to low sun", bounds: [0.3, 0.7]}}
+    outdoor:
+      opening_area_m2: 10.0
+      wind_coefficient: {value: 0.10, unit: "-", source: "DEMO-ASSUMPTION: effective wind-driven exchange coefficient for open sides (cf. single-sided ventilation ~0.025-0.1; cross-flow higher)", bounds: [0.04, 0.2]}
+      min_flow: {value: 0.5, unit: "m3/s", source: "DEMO-ASSUMPTION: buoyancy/turbulence floor at calm", bounds: [0.2, 1.0]}
+      local_wind_factor: {value: 0.35, unit: "-", source: "DEMO-ASSUMPTION: occupant-level speed / 10 m wind under a roof", bounds: [0.2, 0.5]}
+    radiation:
+      floor_view: {roof: 0.6, sky: 0.15}
+      occupant_view: {floor: 0.5, roof: 0.3, sky: 0.1}
+    occupancy:
+      met: {value: 1.1, unit: "met", source: "ASHRAE 55 seated, quiet (1.0) to standing relaxed (1.2)", bounds: [1.0, 1.3]}
+      clo: {value: 0.5, unit: "clo", source: "ASHRAE 55 typical summer clothing", bounds: [0.36, 0.6]}
+      posture: sitting
+
+  sunny_open_space:
+    description: "Unroofed paved space in direct sun; fully exposed to outdoor air"
+    volume_factor: {value: 1.0, unit: "-", source: "occupied layer depth is set by height_m"}
+    surfaces:
+      - id: floor
+        kind: floor
+        material: concrete
+        thickness: {value: 0.15, unit: "m", source: "DEMO-ASSUMPTION"}
+        nodes: 2
+        emissivity: {value: 0.92, unit: "-", source: "concrete (typical)"}
+        solar_absorptance_interior: {value: 0.7, unit: "-", source: "aged paving (typical)", bounds: [0.55, 0.9]}
+        deep_ground_temperature: {value: 28.0, unit: "degC", source: "DEMO-ASSUMPTION", bounds: [24.0, 32.0]}
+        ground_conductance: {value: 2.0, unit: "W/(m2*K)", source: "DEMO-ASSUMPTION"}
+    sun: {mode: constant, value: {value: 1.0, unit: "-", source: "unobstructed"}}
+    outdoor:
+      opening_area_m2: 30.0
+      wind_coefficient: {value: 0.3, unit: "-", source: "DEMO-ASSUMPTION: open space, occupied-layer air replaced by wind", bounds: [0.15, 0.5]}
+      min_flow: {value: 2.0, unit: "m3/s", source: "DEMO-ASSUMPTION: thermal-plume mixing floor", bounds: [1.0, 4.0]}
+      local_wind_factor: {value: 0.6, unit: "-", source: "DEMO-ASSUMPTION: pedestrian-level / 10 m wind", bounds: [0.4, 0.8]}
+    radiation:
+      floor_view: {sky: 0.9}
+      occupant_view: {floor: 0.5, sky: 0.45}
+    occupancy:
+      met: {value: 1.4, unit: "met", source: "ASHRAE 55 standing/light walking", bounds: [1.2, 1.7]}
+      clo: {value: 0.5, unit: "clo", source: "ASHRAE 55 typical summer clothing", bounds: [0.36, 0.6]}
+      posture: standing
+
+  partially_enclosed_waiting:
+    description: "Roofed space with walls on most sides and large openings; semi-open waiting area"
+    volume_factor: {value: 0.9, unit: "-", source: "DEMO-ASSUMPTION: furniture/structure excluded"}
+    surfaces:
+      - id: roof
+        kind: roof
+        material: concrete
+        thickness: {value: 0.15, unit: "m", source: "DEMO-ASSUMPTION: concrete roof slab"}
+        nodes: 2
+        area_fraction: 1.0
+        emissivity: {value: 0.9, unit: "-", source: "concrete"}
+        solar_absorptance_exterior: {value: 0.65, unit: "-", source: "DEMO-ASSUMPTION: weathered membrane over slab", bounds: [0.5, 0.85]}
+        exterior_sky_fraction: 1.0
+      - id: floor
+        kind: floor
+        material: concrete
+        thickness: {value: 0.15, unit: "m", source: "DEMO-ASSUMPTION"}
+        nodes: 2
+        emissivity: {value: 0.92, unit: "-", source: "concrete"}
+        solar_absorptance_interior: {value: 0.6, unit: "-", source: "terrazzo/concrete", bounds: [0.5, 0.7]}
+        deep_ground_temperature: {value: 28.0, unit: "degC", source: "DEMO-ASSUMPTION", bounds: [24.0, 32.0]}
+        ground_conductance: {value: 2.0, unit: "W/(m2*K)", source: "DEMO-ASSUMPTION"}
+    sun: {mode: schedule, points: [[0, 0.0], [7, 0.15], [10, 0.05], [16, 0.05], [18, 0.2], [24, 0.0]]}
+    outdoor:
+      opening_area_m2: 12.0
+      wind_coefficient: {value: 0.05, unit: "-", source: "DEMO-ASSUMPTION: doors/large openings", bounds: [0.02, 0.1]}
+      min_flow: {value: 0.4, unit: "m3/s", source: "DEMO-ASSUMPTION: stack/door-opening floor", bounds: [0.2, 0.8]}
+      local_wind_factor: {value: 0.12, unit: "-", source: "DEMO-ASSUMPTION: sheltered interior", bounds: [0.05, 0.2]}
+    radiation:
+      floor_view: {roof: 0.7, walls: 0.2, sky: 0.02}
+      occupant_view: {floor: 0.45, roof: 0.3, walls: 0.2, sky: 0.02}
+    occupancy:
+      met: {value: 1.2, unit: "met", source: "ASHRAE 55 standing relaxed", bounds: [1.0, 1.4]}
+      clo: {value: 0.5, unit: "clo", source: "ASHRAE 55 typical summer clothing", bounds: [0.36, 0.6]}
+      posture: standing

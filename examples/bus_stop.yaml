@@ -1,0 +1,118 @@
+# Example 1 - open-sided bus-stop shelter (HiMCM 2026 Problem B, requirement 2a).
+# SYNTHETIC DEMONSTRATION: geometry, airflow and occupancy are assumptions, not a survey.
+include: [common/physics_materials.yaml, common/devices.yaml, common/templates.yaml]
+
+meta:
+  name: "Open bus-stop shelter"
+  description: "4 m x 1.8 m roofed shelter with a rear panel, plus the sunny curb where overflow passengers wait."
+  data_status: SYNTHETIC_DEMONSTRATION
+  notes:
+    - "Shelter split into a device-covered bench zone and an uncovered edge zone (exposure groups)."
+    - "The curb is a separate section because its sun exposure differs materially from the shelter."
+
+site: {latitude_deg: 33.45, longitude_deg: -112.07, utc_offset_h: -7, day_of_year: 196}
+weather: {file: data/weather_hot_dry.csv}
+occupancy: {file: data/occupancy_bus_stop.csv}
+simulation: {start_h: 0, end_h: 24, warmup_days: 2, output_step_s: 300}
+
+sections:
+  - id: shelter
+    name: "Shelter (roofed bench area)"
+    template: roofed_open_seating
+    footprint: [[0, 0], [4, 0], [4, 1.8], [0, 1.8]]
+    height_m: 2.6
+    surfaces:
+      - id: roof
+        material: polycarbonate
+        thickness: {value: 8, unit: "mm", source: "DEMO-ASSUMPTION: solid polycarbonate canopy"}
+        solar_absorptance_exterior: {value: 0.5, unit: "-", source: "DEMO-ASSUMPTION: tinted polycarbonate (absorbed share; transmission neglected)", bounds: [0.35, 0.65]}
+      - id: rear_panel
+        kind: wall
+        material: glass
+        thickness: {value: 10, unit: "mm", source: "DEMO-ASSUMPTION: toughened glass ad panel"}
+        nodes: 1
+        area_m2: 8.0
+        azimuth_deg: 0
+        emissivity: {value: 0.84, unit: "-", source: "glass"}
+        solar_absorptance_exterior: {value: 0.15, unit: "-", source: "clear glass absorbed fraction"}
+        exterior_sky_fraction: 0.5
+        interior_sky_fraction: 0.3
+    sun: {mode: canopy, canopy_height_m: 2.6, canopy_depth_m: 1.8,
+          open_side_fraction: {value: 0.5, unit: "-", source: "DEMO-ASSUMPTION: street side open to the south", bounds: [0.3, 0.7]}}
+    outdoor:
+      opening_area_m2: 14.0
+    radiation:
+      floor_view: {roof: 0.55, walls: 0.15, sky: 0.1}
+      occupant_view: {floor: 0.45, roof: 0.3, walls: 0.15, sky: 0.05}
+    exposure_groups:
+      - {id: bench_zone, occupant_share: 0.6}
+      - {id: edge_zone, occupant_share: 0.4}
+
+  - id: curb
+    name: "Curb queue (sunny)"
+    template: sunny_open_space
+    footprint: [[0, -1.5], [4, -1.5], [4, 0], [0, 0]]
+    height_m: 2.5
+    surfaces:
+      - id: floor
+        material: asphalt
+        solar_absorptance_interior: {value: 0.85, unit: "-", source: "aged asphalt (typical 0.8-0.9)", bounds: [0.75, 0.95]}
+    outdoor:
+      opening_area_m2: 20.0
+
+connections:
+  - id: shelter_curb
+    a: shelter
+    b: curb
+    opening_area_m2: 10.4
+    wind_coefficient: {value: 0.05, unit: "-", source: "DEMO-ASSUMPTION: open interface along the street side", bounds: [0.02, 0.1]}
+    min_flow: {value: 0.5, unit: "m3/s", source: "DEMO-ASSUMPTION", bounds: [0.2, 1.0]}
+
+devices:
+  - {id: fan_A, preset: fan_system, serves: [{section: shelter, airflow_fraction: 1.0, groups: [bench_zone]}], schedule: service_hours}
+  - {id: evap_B, preset: evaporative_cooler, serves: [{section: shelter, airflow_fraction: 1.0, groups: [bench_zone]}], schedule: service_hours}
+  - {id: evap_C, preset: large_evaporative_cooler, serves: [{section: shelter, airflow_fraction: 1.0, groups: [bench_zone, edge_zone]}], schedule: service_hours}
+  - {id: evap_B_hot, preset: evaporative_cooler, serves: [{section: shelter, airflow_fraction: 1.0, groups: [bench_zone]}], schedule: occupied_hot}
+
+passive_options:
+  - id: cool_roof
+    description: "White reflective coating on the canopy"
+    set: {"sections[shelter].surfaces[roof].solar_absorptance_exterior": {value: 0.25, unit: "-", source: "DEMO-ASSUMPTION: aged white coating", bounds: [0.15, 0.35]}}
+    capital_cost: {value: 300, unit: "USD", source: "DEMO-ASSUMPTION"}
+    lifetime: {value: 5, unit: "year", source: "DEMO-ASSUMPTION"}
+    maintenance: {value: 20, unit: "USD/year", source: "DEMO-ASSUMPTION"}
+  - id: shade_sail
+    description: "Shade sail over the curb queue (blocks ~70% of direct sun)"
+    set: {"sections[curb].sun.shade_multiplier": {value: 0.3, unit: "-", source: "DEMO-ASSUMPTION: 70% shade-cloth over the queue", bounds: [0.2, 0.45]}}
+    capital_cost: {value: 1500, unit: "USD", source: "DEMO-ASSUMPTION"}
+    lifetime: {value: 8, unit: "year", source: "DEMO-ASSUMPTION"}
+    maintenance: {value: 60, unit: "USD/year", source: "DEMO-ASSUMPTION"}
+
+scenarios:
+  - {id: baseline, description: "No cooling equipment"}
+  - {id: A_fan, description: "Fan system over bench zone, service hours", devices: [fan_A]}
+  - {id: B_evap, description: "Evaporative cooler over bench zone, service hours", devices: [evap_B]}
+  - {id: C_large_evap, description: "Large evaporative cooler covering whole shelter, service hours", devices: [evap_C]}
+  - {id: B_evap_occupied_hot, description: "Evaporative cooler only when occupied and >= 30 C", devices: [evap_B_hot]}
+  - {id: cool_roof_only, description: "Passive: reflective roof", passive: [cool_roof]}
+  - {id: B_evap_plus_shade, description: "Evaporative cooler + curb shade sail", devices: [evap_B], passive: [shade_sail]}
+
+search:
+  objective: energy
+  target: {min_attainment: 0.6, min_section_attainment: 0.0, max_unassessed_fraction: 0.05}
+  constraints: {max_devices: 2, max_investment_usd: 8000, max_water_m3_per_day: 1.0}
+  slots:
+    - id: bench
+      serves: [{section: shelter, airflow_fraction: 1.0, groups: [bench_zone]}]
+      options: [none, fan_system, evaporative_cooler, large_evaporative_cooler]
+    - id: whole_shelter
+      serves: [{section: shelter, airflow_fraction: 1.0, groups: [bench_zone, edge_zone]}]
+      options: [none, fan_system, evaporative_cooler, large_evaporative_cooler]
+  schedules: [service_hours, peak_afternoon, occupied_hot]
+  passive_options: [cool_roof, shade_sail]
+
+uncertainty:
+  samples: 64
+  seed: 2026
+  parameters: all
+  scenarios: [A_fan, B_evap, C_large_evap]

@@ -1,0 +1,99 @@
+path,value,unit,source,bounds
+physics.convection_a,5.7,W/(m2*K),McAdams-type flat-plate correlation h = a + b*v (ASHRAE Fundamentals Ch.4 style); simplified,"[4.0, 7.5]"
+physics.convection_b,3.8,W*s/(m3*K),McAdams-type flat-plate correlation h = a + b*v; simplified,"[2.5, 4.5]"
+physics.still_air_speed,0.1,m/s,"minimum occupant-level air speed (natural convection floor), ASHRAE 55 'still air'",null
+physics.body_surface_area,1.8,m2,DuBois area of a reference adult (ASHRAE 55),null
+comfort.target,30.0,degC,DEMO-ASSUMPTION: SET 30 C ~ boundary between 'slightly warm' and 'warm' (Gagge et al. 1986); configurable,null
+comfort.solar_absorptance_body,0.7,-,ASHRAE 55-2023 Appendix C default short-wave absorptivity (medium skin/clothing),"[0.6, 0.8]"
+materials.concrete.conductivity,1.4,W/(m*K),ASHRAE Fundamentals Ch.33 typical normal-weight concrete,null
+materials.concrete.density,2300.0,kg/m3,ASHRAE Fundamentals Ch.33,null
+materials.concrete.specific_heat,880.0,J/(kg*K),ASHRAE Fundamentals Ch.33,null
+materials.asphalt.conductivity,0.75,W/(m*K),typical asphalt pavement literature value,null
+materials.asphalt.density,2300.0,kg/m3,typical asphalt pavement,null
+materials.asphalt.specific_heat,920.0,J/(kg*K),typical asphalt pavement,null
+materials.steel_sheet.conductivity,45.0,W/(m*K),carbon steel handbook value,null
+materials.steel_sheet.density,7850.0,kg/m3,carbon steel,null
+materials.steel_sheet.specific_heat,500.0,J/(kg*K),carbon steel,null
+materials.polycarbonate.conductivity,0.2,W/(m*K),manufacturer-typical solid polycarbonate,null
+materials.polycarbonate.density,1200.0,kg/m3,solid polycarbonate,null
+materials.polycarbonate.specific_heat,1200.0,J/(kg*K),solid polycarbonate,null
+materials.glass.conductivity,1.0,W/(m*K),soda-lime glass,null
+materials.glass.density,2500.0,kg/m3,soda-lime glass,null
+materials.glass.specific_heat,840.0,J/(kg*K),soda-lime glass,null
+materials.brick.conductivity,0.7,W/(m*K),ASHRAE Fundamentals Ch.33 common brick,null
+materials.brick.density,1800.0,kg/m3,common brick,null
+materials.brick.specific_heat,840.0,J/(kg*K),common brick,null
+materials.fabric_membrane.conductivity,0.2,W/(m*K),PTFE/PVC tensile membrane typical,null
+materials.fabric_membrane.density,1400.0,kg/m3,PTFE/PVC tensile membrane typical,null
+materials.fabric_membrane.specific_heat,1000.0,J/(kg*K),PTFE/PVC tensile membrane typical,null
+tariffs.electricity,0.15,USD/kWh,DEMO-ASSUMPTION: commercial off-peak tariff,"[0.1, 0.25]"
+tariffs.water,2.5,USD/m3,DEMO-ASSUMPTION: combined water + sewer charge,"[1.5, 5.0]"
+tariffs.discount_rate,0.05,1/year,DEMO-ASSUMPTION: public-sector real discount rate,null
+tariffs.season_days,120.0,day,DEMO-ASSUMPTION: each simulated design day stands for one of 120 hot-season days,null
+device_presets.fan_system.electric_power,0.25,kW,SUPPLIED: problem statement table,null
+device_presets.fan_system.airflow,2.5,m3/s,"DEMO-ASSUMPTION: two ~0.6 m pedestal/wall fans, ~4500 m3/h each","[1.5, 3.5]"
+device_presets.fan_system.covered_air_speed,1.3,m/s,"DEMO-ASSUMPTION: mean occupant-level jet speed in covered zone; chosen so the SET reduction at the warm_moderate reference (32 C, 40% RH, still air 0.2 m/s) is ~3 K (`venuecool calibrate`)","[0.8, 1.8]"
+device_presets.fan_system.plume_fraction,0.0,-,fan delivers section air (no process); local air = section air,null
+device_presets.fan_system.capital_cost,600.0,USD,DEMO-ASSUMPTION: installed outdoor-rated fans,null
+device_presets.fan_system.lifetime,8.0,year,DEMO-ASSUMPTION,null
+device_presets.fan_system.maintenance,40.0,USD/year,DEMO-ASSUMPTION,null
+device_presets.evaporative_cooler.electric_power,1.2,kW,SUPPLIED: problem statement table,null
+device_presets.evaporative_cooler.airflow,3.0,m3/s,DEMO-ASSUMPTION: portable direct evaporative unit ~11000 m3/h,"[2.0, 4.0]"
+device_presets.evaporative_cooler.saturation_effectiveness,0.75,-,DEMO-ASSUMPTION: 100 mm cellulose media at rated face velocity,"[0.6, 0.85]"
+device_presets.evaporative_cooler.covered_air_speed,1.0,m/s,DEMO-ASSUMPTION: supply-jet speed at occupants in covered zone,"[0.6, 1.5]"
+device_presets.evaporative_cooler.plume_fraction,0.25,-,DEMO-ASSUMPTION: share of supply air in the air breathed in the covered zone (replace with CFD/measurement),"[0.1, 0.45]"
+device_presets.evaporative_cooler.bleed_fraction,0.15,-,DEMO-ASSUMPTION: bleed-off water per unit evaporated,"[0.05, 0.3]"
+device_presets.evaporative_cooler.capital_cost,2500.0,USD,DEMO-ASSUMPTION: installed with water connection,null
+device_presets.evaporative_cooler.lifetime,7.0,year,DEMO-ASSUMPTION,null
+device_presets.evaporative_cooler.maintenance,250.0,USD/year,DEMO-ASSUMPTION: pads + cleaning,null
+device_presets.large_evaporative_cooler.electric_power,2.5,kW,SUPPLIED: problem statement table,null
+device_presets.large_evaporative_cooler.airflow,6.0,m3/s,DEMO-ASSUMPTION: large ducted/portable unit ~22000 m3/h,"[4.5, 8.0]"
+device_presets.large_evaporative_cooler.saturation_effectiveness,0.82,-,DEMO-ASSUMPTION: 150-200 mm rigid media,"[0.7, 0.9]"
+device_presets.large_evaporative_cooler.covered_air_speed,1.3,m/s,DEMO-ASSUMPTION,"[0.8, 1.8]"
+device_presets.large_evaporative_cooler.plume_fraction,0.35,-,"DEMO-ASSUMPTION: larger jet, larger share of supply air in the covered zone","[0.15, 0.55]"
+device_presets.large_evaporative_cooler.bleed_fraction,0.15,-,DEMO-ASSUMPTION,"[0.05, 0.3]"
+device_presets.large_evaporative_cooler.capital_cost,5000.0,USD,DEMO-ASSUMPTION,null
+device_presets.large_evaporative_cooler.lifetime,8.0,year,DEMO-ASSUMPTION,null
+device_presets.large_evaporative_cooler.maintenance,400.0,USD/year,DEMO-ASSUMPTION,null
+schedules.occupied_hot.outdoor_threshold,30.0,degC,DEMO-ASSUMPTION: run when people present and outdoor air >= 30 C,null
+schedules.occupied_very_hot.outdoor_threshold,33.0,degC,DEMO-ASSUMPTION: run when people present and outdoor air >= 33 C,null
+sections[shelter].volume_factor,1.0,-,open structure: full geometric volume participates,null
+sections[shelter].surfaces[roof].thickness,8.0,mm,DEMO-ASSUMPTION: solid polycarbonate canopy,null
+sections[shelter].surfaces[roof].emissivity,0.85,-,painted metal (typical),"[0.7, 0.9]"
+sections[shelter].surfaces[roof].solar_absorptance_exterior,0.5,-,DEMO-ASSUMPTION: tinted polycarbonate (absorbed share; transmission neglected),"[0.35, 0.65]"
+sections[shelter].surfaces[floor].thickness,0.15,m,DEMO-ASSUMPTION: slab top layer modelled with 2 nodes,null
+sections[shelter].surfaces[floor].emissivity,0.92,-,concrete (typical),null
+sections[shelter].surfaces[floor].solar_absorptance_interior,0.65,-,aged grey concrete (typical),"[0.55, 0.75]"
+sections[shelter].surfaces[floor].deep_ground_temperature,28.0,degC,DEMO-ASSUMPTION: ~annual-mean ground at ~0.5 m in a hot climate,"[24.0, 32.0]"
+sections[shelter].surfaces[floor].ground_conductance,2.0,W/(m2*K),DEMO-ASSUMPTION: soil k~1 W/mK over ~0.5 m,null
+sections[shelter].surfaces[rear_panel].thickness,10.0,mm,DEMO-ASSUMPTION: toughened glass ad panel,null
+sections[shelter].surfaces[rear_panel].emissivity,0.84,-,glass,null
+sections[shelter].surfaces[rear_panel].solar_absorptance_exterior,0.15,-,clear glass absorbed fraction,null
+sections[shelter].sun.open_side_fraction,0.5,-,DEMO-ASSUMPTION: street side open to the south,"[0.3, 0.7]"
+sections[shelter].outdoor.wind_coefficient,0.1,-,DEMO-ASSUMPTION: effective wind-driven exchange coefficient for open sides (cf. single-sided ventilation ~0.025-0.1; cross-flow higher),"[0.04, 0.2]"
+sections[shelter].outdoor.min_flow,0.5,m3/s,DEMO-ASSUMPTION: buoyancy/turbulence floor at calm,"[0.2, 1.0]"
+sections[shelter].outdoor.local_wind_factor,0.35,-,DEMO-ASSUMPTION: occupant-level speed / 10 m wind under a roof,"[0.2, 0.5]"
+sections[shelter].occupancy.met,1.1,met,"ASHRAE 55 seated, quiet (1.0) to standing relaxed (1.2)","[1.0, 1.3]"
+sections[shelter].occupancy.clo,0.5,clo,ASHRAE 55 typical summer clothing,"[0.36, 0.6]"
+sections[curb].volume_factor,1.0,-,occupied layer depth is set by height_m,null
+sections[curb].surfaces[floor].thickness,0.15,m,DEMO-ASSUMPTION,null
+sections[curb].surfaces[floor].emissivity,0.92,-,concrete (typical),null
+sections[curb].surfaces[floor].solar_absorptance_interior,0.85,-,aged asphalt (typical 0.8-0.9),"[0.75, 0.95]"
+sections[curb].surfaces[floor].deep_ground_temperature,28.0,degC,DEMO-ASSUMPTION,"[24.0, 32.0]"
+sections[curb].surfaces[floor].ground_conductance,2.0,W/(m2*K),DEMO-ASSUMPTION,null
+sections[curb].sun.value,1.0,-,unobstructed,null
+sections[curb].outdoor.wind_coefficient,0.3,-,"DEMO-ASSUMPTION: open space, occupied-layer air replaced by wind","[0.15, 0.5]"
+sections[curb].outdoor.min_flow,2.0,m3/s,DEMO-ASSUMPTION: thermal-plume mixing floor,"[1.0, 4.0]"
+sections[curb].outdoor.local_wind_factor,0.6,-,DEMO-ASSUMPTION: pedestrian-level / 10 m wind,"[0.4, 0.8]"
+sections[curb].occupancy.met,1.4,met,ASHRAE 55 standing/light walking,"[1.2, 1.7]"
+sections[curb].occupancy.clo,0.5,clo,ASHRAE 55 typical summer clothing,"[0.36, 0.6]"
+connections[shelter_curb].wind_coefficient,0.05,-,DEMO-ASSUMPTION: open interface along the street side,"[0.02, 0.1]"
+connections[shelter_curb].min_flow,0.5,m3/s,DEMO-ASSUMPTION,"[0.2, 1.0]"
+passive_options[cool_roof].set.sections[shelter].surfaces[roof].solar_absorptance_exterior,0.25,-,DEMO-ASSUMPTION: aged white coating,"[0.15, 0.35]"
+passive_options[cool_roof].capital_cost,300.0,USD,DEMO-ASSUMPTION,null
+passive_options[cool_roof].lifetime,5.0,year,DEMO-ASSUMPTION,null
+passive_options[cool_roof].maintenance,20.0,USD/year,DEMO-ASSUMPTION,null
+passive_options[shade_sail].set.sections[curb].sun.shade_multiplier,0.3,-,DEMO-ASSUMPTION: 70% shade-cloth over the queue,"[0.2, 0.45]"
+passive_options[shade_sail].capital_cost,1500.0,USD,DEMO-ASSUMPTION,null
+passive_options[shade_sail].lifetime,8.0,year,DEMO-ASSUMPTION,null
+passive_options[shade_sail].maintenance,60.0,USD/year,DEMO-ASSUMPTION,null

@@ -1,0 +1,1153 @@
+{
+  "venue": "Synthetic three-section venue",
+  "data_status": "SYNTHETIC_DEMONSTRATION",
+  "description": "Roofed open seating (600 m2), sunny entry plaza (500 m2), partially enclosed concourse (320 m2).",
+  "notes": [
+    "Each exposure group is sized for one unit's coverage, so the search chooses placement as well as type.",
+    "evap_gate_shared serves seating zone_4 and the concourse gate end (one ledger, airflow split 50/50)."
+  ],
+  "weather_file": "/Users/ian/Desktop/Homework/COMAP/COMAP_Simulation/examples/data/weather_warm_humid.csv",
+  "weather_metadata": {
+    "data_status": "SYNTHETIC_DEMONSTRATION (not measured)",
+    "description": "Synthetic warm/humid design day (Houston-like site geometry); Tmax 34 C, dew point ~24 C",
+    "latitude_deg": "29.76",
+    "longitude_deg": "-95.37",
+    "utc_offset_h": "-5",
+    "day_of_year": "196",
+    "generator": "examples/make_synthetic_inputs.py (clear-sky Meinel beam model, cosine diurnal temperature)"
+  },
+  "occupancy_metadata": {
+    "data_status": "SYNTHETIC_DEMONSTRATION (not measured)",
+    "description": "Synthetic three-section open-air venue (roofed seating, sunny plaza, partially enclosed concourse)",
+    "meaning": "mean number of people present during [time_h, next time_h) -- not visitor counts"
+  },
+  "comfort_index": "SET",
+  "target_C": 30.0,
+  "decision_basis": "extended",
+  "horizon": {
+    "simulated_hours": 24.0,
+    "season_days": 120.0,
+    "note": "Simulated period is a representative design day; operating quantities are scaled by season_days / simulated_days; capital is annualised (CRF) and charged once per season (one season per year)."
+  },
+  "disclaimer": "Modeled comfort burden (SET-based) for comparing configurations; not a measured satisfaction rate and not a medical heat-safety guarantee. Person-hours are not visitors.",
+  "scenarios": {
+    "baseline": {
+      "devices": [],
+      "passive": [],
+      "metrics": {
+        "sections": {
+          "seating": {
+            "occupied_person_hours": 1905.5000000000002,
+            "assessed_person_hours": 1905.5000000000002,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 993.7700915029659,
+            "extrapolated_person_hours": 911.7299084970342,
+            "served_person_hours": 0.0,
+            "burden_Kph": 5150.080527380784,
+            "meeting_person_hours": 499.0043865169179,
+            "attainment": 0.26187582603879184,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 2.7027449632016705
+          },
+          "plaza": {
+            "occupied_person_hours": 505.7,
+            "assessed_person_hours": 505.7,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 52.28333333333333,
+            "extrapolated_person_hours": 453.4166666666667,
+            "served_person_hours": 0.0,
+            "burden_Kph": 3764.043598589417,
+            "meeting_person_hours": 33.099999999999994,
+            "attainment": 0.06545382637927624,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 7.443234325863984
+          },
+          "concourse": {
+            "occupied_person_hours": 901.3,
+            "assessed_person_hours": 901.3,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 828.3982060185183,
+            "extrapolated_person_hours": 72.90179398148149,
+            "served_person_hours": 0.0,
+            "burden_Kph": 3976.1755238527066,
+            "meeting_person_hours": 0.0,
+            "attainment": 0.0,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 4.411600492458345
+          }
+        },
+        "venue": {
+          "occupied_person_hours": 3312.5,
+          "assessed_person_hours": 3312.5,
+          "unassessed_person_hours": 0.0,
+          "supported_person_hours": 1874.4516308548177,
+          "extrapolated_person_hours": 1438.0483691451823,
+          "served_person_hours": 0.0,
+          "burden_Kph": 12890.299649822908,
+          "meeting_person_hours": 532.1043865169179,
+          "attainment": 0.16063528649567332,
+          "unassessed_fraction": 0.0,
+          "burden_per_person_hour": 3.8914112150408777
+        },
+        "poorly_served": [
+          "seating",
+          "plaza",
+          "concourse"
+        ]
+      },
+      "costs": {
+        "electricity_kWh": 0,
+        "water_m3": 0,
+        "energy_cost_usd": 0,
+        "water_cost_usd": 0,
+        "investment_usd": 0,
+        "installed_kW": 0,
+        "season_scale": 120.0,
+        "season_electricity_kWh": 0.0,
+        "season_water_m3": 0.0,
+        "season_operating_usd": 0.0,
+        "season_capital_and_maintenance_usd": 0,
+        "season_total_cost_usd": 0.0,
+        "n_devices": 0
+      },
+      "ledgers": [],
+      "conservation": {
+        "energy_residual_J": -5.245208740234375e-06,
+        "energy_gross_J": 68844723599.3815,
+        "energy_residual_rel": -7.618897231336256e-17,
+        "water_residual_kg": 1.2204126598192033e-13,
+        "water_gross_kg": 900.541951165224,
+        "water_residual_rel": 1.3551980096430756e-16,
+        "internal_cancellation_rel_max": 2.804509525700552e-16,
+        "dry_air_imbalance_kg_s": 0.0,
+        "device_evaporated_kg": 0.0,
+        "evaporation_ode_to_quadrature_ratio": 1.0,
+        "stored_energy_change_J": 3610183.630168915
+      },
+      "invalid_states": {
+        "negative_humidity": 0,
+        "supersaturated": 0,
+        "temperature_out_of_range": 0,
+        "non_finite": 0,
+        "surface_temperature_out_of_range": 0
+      },
+      "runtime_s": 0.6500008329999218,
+      "rhs_evaluations": 6461,
+      "comparison": null
+    },
+    "hvls_fans": {
+      "devices": [
+        "hvls_z1",
+        "hvls_z2",
+        "hvls_z3"
+      ],
+      "passive": [],
+      "metrics": {
+        "sections": {
+          "seating": {
+            "occupied_person_hours": 1905.5000000000002,
+            "assessed_person_hours": 1905.5000000000002,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 993.7700915029659,
+            "extrapolated_person_hours": 911.7299084970342,
+            "served_person_hours": 1367.7,
+            "burden_Kph": 4176.408911836227,
+            "meeting_person_hours": 613.339743258184,
+            "attainment": 0.3218786372386166,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 2.191765369633286
+          },
+          "plaza": {
+            "occupied_person_hours": 505.7,
+            "assessed_person_hours": 505.7,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 52.28333333333333,
+            "extrapolated_person_hours": 453.4166666666667,
+            "served_person_hours": 0.0,
+            "burden_Kph": 3765.6603900165146,
+            "meeting_person_hours": 33.099999999999994,
+            "attainment": 0.06545382637927624,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 7.446431461373373
+          },
+          "concourse": {
+            "occupied_person_hours": 901.3,
+            "assessed_person_hours": 901.3,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 828.3982060185183,
+            "extrapolated_person_hours": 72.90179398148149,
+            "served_person_hours": 0.0,
+            "burden_Kph": 3983.1080121918244,
+            "meeting_person_hours": 0.0,
+            "attainment": 0.0,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 4.419292147111755
+          }
+        },
+        "venue": {
+          "occupied_person_hours": 3312.5,
+          "assessed_person_hours": 3312.5,
+          "unassessed_person_hours": 0.0,
+          "supported_person_hours": 1874.4516308548177,
+          "extrapolated_person_hours": 1438.0483691451823,
+          "served_person_hours": 1367.7,
+          "burden_Kph": 11925.177314044566,
+          "meeting_person_hours": 646.439743258184,
+          "attainment": 0.19515162060624422,
+          "unassessed_fraction": 0.0,
+          "burden_per_person_hour": 3.600053528768171
+        },
+        "poorly_served": [
+          "seating",
+          "plaza",
+          "concourse"
+        ]
+      },
+      "costs": {
+        "electricity_kWh": 72.0,
+        "water_m3": 0.0,
+        "energy_cost_usd": 13.049999999999999,
+        "water_cost_usd": 0.0,
+        "investment_usd": 27000.0,
+        "installed_kW": 4.5,
+        "season_scale": 120.0,
+        "season_electricity_kWh": 8640.0,
+        "season_water_m3": 0.0,
+        "season_operating_usd": 1565.9999999999998,
+        "season_capital_and_maintenance_usd": 3051.2417654495966,
+        "season_total_cost_usd": 4617.241765449597,
+        "n_devices": 3
+      },
+      "ledgers": [
+        {
+          "device": "hvls_z1",
+          "preset": "hvls_fan",
+          "kind": "fan",
+          "intake": "recirculate",
+          "schedule": "service_hours",
+          "serves": "seating:1.00",
+          "on_hours": 16.0,
+          "electric_power_kW": 1.5,
+          "electricity_kWh": 24.0,
+          "electricity_cost_usd": 4.35,
+          "evaporated_kg": 0.0,
+          "water_m3": 0.0,
+          "water_cost_usd": 0.0,
+          "capital_usd": 9000.0,
+          "lifetime_y": 15.0,
+          "maintenance_usd_y": 150.0
+        },
+        {
+          "device": "hvls_z2",
+          "preset": "hvls_fan",
+          "kind": "fan",
+          "intake": "recirculate",
+          "schedule": "service_hours",
+          "serves": "seating:1.00",
+          "on_hours": 16.0,
+          "electric_power_kW": 1.5,
+          "electricity_kWh": 24.0,
+          "electricity_cost_usd": 4.35,
+          "evaporated_kg": 0.0,
+          "water_m3": 0.0,
+          "water_cost_usd": 0.0,
+          "capital_usd": 9000.0,
+          "lifetime_y": 15.0,
+          "maintenance_usd_y": 150.0
+        },
+        {
+          "device": "hvls_z3",
+          "preset": "hvls_fan",
+          "kind": "fan",
+          "intake": "recirculate",
+          "schedule": "service_hours",
+          "serves": "seating:1.00",
+          "on_hours": 16.0,
+          "electric_power_kW": 1.5,
+          "electricity_kWh": 24.0,
+          "electricity_cost_usd": 4.35,
+          "evaporated_kg": 0.0,
+          "water_m3": 0.0,
+          "water_cost_usd": 0.0,
+          "capital_usd": 9000.0,
+          "lifetime_y": 15.0,
+          "maintenance_usd_y": 150.0
+        }
+      ],
+      "conservation": {
+        "energy_residual_J": -4.291534423828125e-06,
+        "energy_gross_J": 69605630537.64146,
+        "energy_residual_rel": -6.165498955587136e-17,
+        "water_residual_kg": -6.297320997994404e-11,
+        "water_gross_kg": 902.4128901019351,
+        "water_residual_rel": -6.978314546552044e-14,
+        "internal_cancellation_rel_max": 2.2924061780977867e-16,
+        "dry_air_imbalance_kg_s": 2.842170943040401e-14,
+        "device_evaporated_kg": 0.0,
+        "evaporation_ode_to_quadrature_ratio": 1.0,
+        "stored_energy_change_J": 3616059.7389945984
+      },
+      "invalid_states": {
+        "negative_humidity": 0,
+        "supersaturated": 0,
+        "temperature_out_of_range": 0,
+        "non_finite": 0,
+        "surface_temperature_out_of_range": 0
+      },
+      "runtime_s": 0.8154696249998779,
+      "rhs_evaluations": 6511,
+      "comparison": {
+        "relief_Kph": 965.1223357783415,
+        "baseline_burden_matched_Kph": 12890.299649822908,
+        "residual_burden_matched_Kph": 11925.177314044566,
+        "unmatched_person_hours": 0.0,
+        "incremental_kWh": 72.0,
+        "incremental_season_cost_usd": 4617.241765449597,
+        "relief_per_kWh": 13.404476885810299,
+        "season_relief_Kph": 115814.68029340098,
+        "relief_per_usd": 25.083087734333468,
+        "sections": {
+          "seating": {
+            "relief_Kph": 973.6716155445575,
+            "baseline_burden_matched_Kph": 5150.080527380784,
+            "residual_burden_matched_Kph": 4176.408911836227,
+            "unmatched_person_hours": 0.0
+          },
+          "plaza": {
+            "relief_Kph": -1.6167914270975992,
+            "baseline_burden_matched_Kph": 3764.043598589417,
+            "residual_burden_matched_Kph": 3765.6603900165146,
+            "unmatched_person_hours": 0.0
+          },
+          "concourse": {
+            "relief_Kph": -6.9324883391183505,
+            "baseline_burden_matched_Kph": 3976.1755238527066,
+            "residual_burden_matched_Kph": 3983.1080121918244,
+            "unmatched_person_hours": 0.0
+          }
+        },
+        "worsened_sections": [
+          "plaza",
+          "concourse"
+        ]
+      }
+    },
+    "evap_concourse_shared": {
+      "devices": [
+        "evap_stalls",
+        "evap_gate_shared"
+      ],
+      "passive": [],
+      "metrics": {
+        "sections": {
+          "seating": {
+            "occupied_person_hours": 1905.5000000000002,
+            "assessed_person_hours": 1905.5000000000002,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 1001.7447522892516,
+            "extrapolated_person_hours": 903.7552477107484,
+            "served_person_hours": 455.90000000000003,
+            "burden_Kph": 4352.059998820925,
+            "meeting_person_hours": 593.2936897093848,
+            "attainment": 0.31135853566485683,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 2.2839464701238126
+          },
+          "plaza": {
+            "occupied_person_hours": 505.7,
+            "assessed_person_hours": 505.7,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 52.28333333333333,
+            "extrapolated_person_hours": 453.4166666666667,
+            "served_person_hours": 0.0,
+            "burden_Kph": 3751.3035839193335,
+            "meeting_person_hours": 33.099999999999994,
+            "attainment": 0.06545382637927624,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 7.41804149479797
+          },
+          "concourse": {
+            "occupied_person_hours": 901.3,
+            "assessed_person_hours": 901.3,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 829.7606018518517,
+            "extrapolated_person_hours": 71.53939814814814,
+            "served_person_hours": 555.1700000000001,
+            "burden_Kph": 1564.5169435509274,
+            "meeting_person_hours": 247.01833333333335,
+            "attainment": 0.27406893746070493,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 1.7358448280826888
+          }
+        },
+        "venue": {
+          "occupied_person_hours": 3312.5,
+          "assessed_person_hours": 3312.5,
+          "unassessed_person_hours": 0.0,
+          "supported_person_hours": 1883.7886874744368,
+          "extrapolated_person_hours": 1428.7113125255632,
+          "served_person_hours": 1011.0700000000002,
+          "burden_Kph": 9667.880526291185,
+          "meeting_person_hours": 873.4120230427181,
+          "attainment": 0.2636715541261036,
+          "unassessed_fraction": 0.0,
+          "burden_per_person_hour": 2.9186054418992255
+        },
+        "poorly_served": [
+          "seating",
+          "plaza",
+          "concourse"
+        ]
+      },
+      "costs": {
+        "electricity_kWh": 80.0,
+        "water_m3": 1.6385252745376007,
+        "energy_cost_usd": 14.5,
+        "water_cost_usd": 4.096313186344002,
+        "investment_usd": 10000.0,
+        "installed_kW": 5.0,
+        "season_scale": 120.0,
+        "season_electricity_kWh": 9600.0,
+        "season_water_m3": 196.6230329445121,
+        "season_operating_usd": 2231.5575823612803,
+        "season_capital_and_maintenance_usd": 2347.2181362768106,
+        "season_total_cost_usd": 4578.775718638091,
+        "n_devices": 2
+      },
+      "ledgers": [
+        {
+          "device": "evap_stalls",
+          "preset": "large_evaporative_cooler",
+          "kind": "evaporative",
+          "intake": "outdoor",
+          "schedule": "service_hours",
+          "serves": "concourse:1.00",
+          "on_hours": 16.0,
+          "electric_power_kW": 2.5,
+          "electricity_kWh": 40.0,
+          "electricity_cost_usd": 7.25,
+          "evaporated_kg": 712.4022932772177,
+          "water_m3": 0.8192626372688003,
+          "water_cost_usd": 2.048156593172001,
+          "capital_usd": 5000.0,
+          "lifetime_y": 8.0,
+          "maintenance_usd_y": 400.0
+        },
+        {
+          "device": "evap_gate_shared",
+          "preset": "large_evaporative_cooler",
+          "kind": "evaporative",
+          "intake": "outdoor",
+          "schedule": "service_hours",
+          "serves": "seating:0.50;concourse:0.50",
+          "on_hours": 16.0,
+          "electric_power_kW": 2.5,
+          "electricity_kWh": 40.0,
+          "electricity_cost_usd": 7.25,
+          "evaporated_kg": 712.4022932772177,
+          "water_m3": 0.8192626372688003,
+          "water_cost_usd": 2.048156593172001,
+          "capital_usd": 5000.0,
+          "lifetime_y": 8.0,
+          "maintenance_usd_y": 400.0
+        }
+      ],
+      "conservation": {
+        "energy_residual_J": -9.059906005859375e-06,
+        "energy_gross_J": 69380331654.13977,
+        "energy_residual_rel": -1.3058320405591186e-16,
+        "water_residual_kg": -7.063793994177558e-14,
+        "water_gross_kg": 2827.2029591508854,
+        "water_residual_rel": -2.4985096918188993e-17,
+        "internal_cancellation_rel_max": 3.2161975502039386e-16,
+        "dry_air_imbalance_kg_s": 7.105427357601002e-15,
+        "device_evaporated_kg": 1424.8045865544354,
+        "evaporation_ode_to_quadrature_ratio": 1.0000001964163279,
+        "stored_energy_change_J": 3098778.9643592834
+      },
+      "invalid_states": {
+        "negative_humidity": 0,
+        "supersaturated": 0,
+        "temperature_out_of_range": 0,
+        "non_finite": 0,
+        "surface_temperature_out_of_range": 0
+      },
+      "runtime_s": 1.829072792000261,
+      "rhs_evaluations": 6565,
+      "comparison": {
+        "relief_Kph": 3222.419123531721,
+        "baseline_burden_matched_Kph": 12890.299649822908,
+        "residual_burden_matched_Kph": 9667.880526291185,
+        "unmatched_person_hours": 0.0,
+        "incremental_kWh": 80.0,
+        "incremental_season_cost_usd": 4578.775718638091,
+        "relief_per_kWh": 40.28023904414651,
+        "season_relief_Kph": 386690.29482380656,
+        "relief_per_usd": 84.45277047525349,
+        "sections": {
+          "seating": {
+            "relief_Kph": 798.0205285598597,
+            "baseline_burden_matched_Kph": 5150.080527380784,
+            "residual_burden_matched_Kph": 4352.059998820925,
+            "unmatched_person_hours": 0.0
+          },
+          "plaza": {
+            "relief_Kph": 12.740014670083116,
+            "baseline_burden_matched_Kph": 3764.043598589417,
+            "residual_burden_matched_Kph": 3751.3035839193335,
+            "unmatched_person_hours": 0.0
+          },
+          "concourse": {
+            "relief_Kph": 2411.6585803017792,
+            "baseline_burden_matched_Kph": 3976.1755238527066,
+            "residual_burden_matched_Kph": 1564.5169435509274,
+            "unmatched_person_hours": 0.0
+          }
+        },
+        "worsened_sections": []
+      }
+    },
+    "full_mix": {
+      "devices": [
+        "hvls_z1",
+        "hvls_z2",
+        "hvls_z3",
+        "evap_stalls",
+        "evap_gate_shared",
+        "evap_queue"
+      ],
+      "passive": [],
+      "metrics": {
+        "sections": {
+          "seating": {
+            "occupied_person_hours": 1905.5000000000002,
+            "assessed_person_hours": 1905.5000000000002,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 1001.7447522892516,
+            "extrapolated_person_hours": 903.7552477107484,
+            "served_person_hours": 1823.6000000000001,
+            "burden_Kph": 3359.9387081784716,
+            "meeting_person_hours": 720.7474446643027,
+            "attainment": 0.3782458381864616,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 1.763284549030948
+          },
+          "plaza": {
+            "occupied_person_hours": 505.7,
+            "assessed_person_hours": 505.7,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 52.28333333333333,
+            "extrapolated_person_hours": 453.4166666666667,
+            "served_person_hours": 202.28,
+            "burden_Kph": 3568.2080738546692,
+            "meeting_person_hours": 35.68,
+            "attainment": 0.07055566541427724,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 7.05597799852614
+          },
+          "concourse": {
+            "occupied_person_hours": 901.3,
+            "assessed_person_hours": 901.3,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 829.7606018518517,
+            "extrapolated_person_hours": 71.53939814814814,
+            "served_person_hours": 555.1700000000001,
+            "burden_Kph": 1564.408744111979,
+            "meeting_person_hours": 247.01833333333335,
+            "attainment": 0.27406893746070493,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 1.735724779886807
+          }
+        },
+        "venue": {
+          "occupied_person_hours": 3312.5,
+          "assessed_person_hours": 3312.5,
+          "unassessed_person_hours": 0.0,
+          "supported_person_hours": 1883.7886874744368,
+          "extrapolated_person_hours": 1428.7113125255632,
+          "served_person_hours": 2581.05,
+          "burden_Kph": 8492.555526145119,
+          "meeting_person_hours": 1003.4457779976361,
+          "attainment": 0.3029270273200411,
+          "unassessed_fraction": 0.0,
+          "burden_per_person_hour": 2.5637903475155075
+        },
+        "poorly_served": [
+          "seating",
+          "plaza",
+          "concourse"
+        ]
+      },
+      "costs": {
+        "electricity_kWh": 171.2,
+        "water_m3": 2.0130744629348842,
+        "energy_cost_usd": 31.029999999999998,
+        "water_cost_usd": 5.03268615733721,
+        "investment_usd": 39500.0,
+        "installed_kW": 10.7,
+        "season_scale": 120.0,
+        "season_electricity_kWh": 20544.0,
+        "season_water_m3": 241.5689355521861,
+        "season_operating_usd": 4327.522338880465,
+        "season_capital_and_maintenance_usd": 6080.509447841834,
+        "season_total_cost_usd": 10408.031786722298,
+        "n_devices": 6
+      },
+      "ledgers": [
+        {
+          "device": "hvls_z1",
+          "preset": "hvls_fan",
+          "kind": "fan",
+          "intake": "recirculate",
+          "schedule": "service_hours",
+          "serves": "seating:1.00",
+          "on_hours": 16.0,
+          "electric_power_kW": 1.5,
+          "electricity_kWh": 24.0,
+          "electricity_cost_usd": 4.35,
+          "evaporated_kg": 0.0,
+          "water_m3": 0.0,
+          "water_cost_usd": 0.0,
+          "capital_usd": 9000.0,
+          "lifetime_y": 15.0,
+          "maintenance_usd_y": 150.0
+        },
+        {
+          "device": "hvls_z2",
+          "preset": "hvls_fan",
+          "kind": "fan",
+          "intake": "recirculate",
+          "schedule": "service_hours",
+          "serves": "seating:1.00",
+          "on_hours": 16.0,
+          "electric_power_kW": 1.5,
+          "electricity_kWh": 24.0,
+          "electricity_cost_usd": 4.35,
+          "evaporated_kg": 0.0,
+          "water_m3": 0.0,
+          "water_cost_usd": 0.0,
+          "capital_usd": 9000.0,
+          "lifetime_y": 15.0,
+          "maintenance_usd_y": 150.0
+        },
+        {
+          "device": "hvls_z3",
+          "preset": "hvls_fan",
+          "kind": "fan",
+          "intake": "recirculate",
+          "schedule": "service_hours",
+          "serves": "seating:1.00",
+          "on_hours": 16.0,
+          "electric_power_kW": 1.5,
+          "electricity_kWh": 24.0,
+          "electricity_cost_usd": 4.35,
+          "evaporated_kg": 0.0,
+          "water_m3": 0.0,
+          "water_cost_usd": 0.0,
+          "capital_usd": 9000.0,
+          "lifetime_y": 15.0,
+          "maintenance_usd_y": 150.0
+        },
+        {
+          "device": "evap_stalls",
+          "preset": "large_evaporative_cooler",
+          "kind": "evaporative",
+          "intake": "outdoor",
+          "schedule": "service_hours",
+          "serves": "concourse:1.00",
+          "on_hours": 16.0,
+          "electric_power_kW": 2.5,
+          "electricity_kWh": 40.0,
+          "electricity_cost_usd": 7.25,
+          "evaporated_kg": 712.4022921488906,
+          "water_m3": 0.8192626359712242,
+          "water_cost_usd": 2.0481565899280603,
+          "capital_usd": 5000.0,
+          "lifetime_y": 8.0,
+          "maintenance_usd_y": 400.0
+        },
+        {
+          "device": "evap_gate_shared",
+          "preset": "large_evaporative_cooler",
+          "kind": "evaporative",
+          "intake": "outdoor",
+          "schedule": "service_hours",
+          "serves": "seating:0.50;concourse:0.50",
+          "on_hours": 16.0,
+          "electric_power_kW": 2.5,
+          "electricity_kWh": 40.0,
+          "electricity_cost_usd": 7.25,
+          "evaporated_kg": 712.4022921488906,
+          "water_m3": 0.8192626359712242,
+          "water_cost_usd": 2.0481565899280603,
+          "capital_usd": 5000.0,
+          "lifetime_y": 8.0,
+          "maintenance_usd_y": 400.0
+        },
+        {
+          "device": "evap_queue",
+          "preset": "evaporative_cooler",
+          "kind": "evaporative",
+          "intake": "outdoor",
+          "schedule": "service_hours",
+          "serves": "plaza:1.00",
+          "on_hours": 16.0,
+          "electric_power_kW": 1.2,
+          "electricity_kWh": 19.2,
+          "electricity_cost_usd": 3.4799999999999995,
+          "evaporated_kg": 325.6949486890747,
+          "water_m3": 0.37454919099243583,
+          "water_cost_usd": 0.9363729774810896,
+          "capital_usd": 2500.0,
+          "lifetime_y": 7.0,
+          "maintenance_usd_y": 250.0
+        }
+      ],
+      "conservation": {
+        "energy_residual_J": 1.0967254638671875e-05,
+        "energy_gross_J": 69869457513.00992,
+        "energy_residual_rel": 1.5696779435606376e-16,
+        "water_residual_kg": -2.7775004518559854e-13,
+        "water_gross_kg": 3432.1524491765667,
+        "water_residual_rel": -8.092590562293805e-17,
+        "internal_cancellation_rel_max": 2.9902922260673105e-16,
+        "dry_air_imbalance_kg_s": 2.842170943040401e-14,
+        "device_evaporated_kg": 1750.4995329868561,
+        "evaporation_ode_to_quadrature_ratio": 1.0000001948324935,
+        "stored_energy_change_J": 3093803.1206970215
+      },
+      "invalid_states": {
+        "negative_humidity": 0,
+        "supersaturated": 0,
+        "temperature_out_of_range": 0,
+        "non_finite": 0,
+        "surface_temperature_out_of_range": 0
+      },
+      "runtime_s": 1.78004966699973,
+      "rhs_evaluations": 6609,
+      "comparison": {
+        "relief_Kph": 4397.744123677788,
+        "baseline_burden_matched_Kph": 12890.299649822908,
+        "residual_burden_matched_Kph": 8492.555526145119,
+        "unmatched_person_hours": 0.0,
+        "incremental_kWh": 171.2,
+        "incremental_season_cost_usd": 10408.031786722298,
+        "relief_per_kWh": 25.68775773176278,
+        "season_relief_Kph": 527729.2948413346,
+        "relief_per_usd": 50.70404334415732,
+        "sections": {
+          "seating": {
+            "relief_Kph": 1790.1418192023125,
+            "baseline_burden_matched_Kph": 5150.080527380784,
+            "residual_burden_matched_Kph": 3359.9387081784716,
+            "unmatched_person_hours": 0.0
+          },
+          "plaza": {
+            "relief_Kph": 195.83552473474788,
+            "baseline_burden_matched_Kph": 3764.043598589417,
+            "residual_burden_matched_Kph": 3568.2080738546692,
+            "unmatched_person_hours": 0.0
+          },
+          "concourse": {
+            "relief_Kph": 2411.7667797407275,
+            "baseline_burden_matched_Kph": 3976.1755238527066,
+            "residual_burden_matched_Kph": 1564.408744111979,
+            "unmatched_person_hours": 0.0
+          }
+        },
+        "worsened_sections": []
+      }
+    },
+    "plaza_shade_only": {
+      "devices": [],
+      "passive": [
+        "plaza_shade"
+      ],
+      "metrics": {
+        "sections": {
+          "seating": {
+            "occupied_person_hours": 1905.5000000000002,
+            "assessed_person_hours": 1905.5000000000002,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 993.7700915029659,
+            "extrapolated_person_hours": 911.7299084970342,
+            "served_person_hours": 0.0,
+            "burden_Kph": 5080.489015746373,
+            "meeting_person_hours": 499.0043865169179,
+            "attainment": 0.26187582603879184,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 2.666223571632838
+          },
+          "plaza": {
+            "occupied_person_hours": 505.7,
+            "assessed_person_hours": 505.7,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 212.87541666666667,
+            "extrapolated_person_hours": 292.82458333333335,
+            "served_person_hours": 0.0,
+            "burden_Kph": 1657.8622191440732,
+            "meeting_person_hours": 62.235000000000014,
+            "attainment": 0.12306703579197155,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 3.2783512342180603
+          },
+          "concourse": {
+            "occupied_person_hours": 901.3,
+            "assessed_person_hours": 901.3,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 829.7606018518517,
+            "extrapolated_person_hours": 71.53939814814814,
+            "served_person_hours": 0.0,
+            "burden_Kph": 3943.6753994110472,
+            "meeting_person_hours": 0.0,
+            "attainment": 0.0,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 4.375541328537721
+          }
+        },
+        "venue": {
+          "occupied_person_hours": 3312.5,
+          "assessed_person_hours": 3312.5,
+          "unassessed_person_hours": 0.0,
+          "supported_person_hours": 2036.4061100214844,
+          "extrapolated_person_hours": 1276.0938899785156,
+          "served_person_hours": 0.0,
+          "burden_Kph": 10682.026634301492,
+          "meeting_person_hours": 561.2393865169179,
+          "attainment": 0.16943075819378653,
+          "unassessed_fraction": 0.0,
+          "burden_per_person_hour": 3.224762757524979
+        },
+        "poorly_served": [
+          "seating",
+          "plaza",
+          "concourse"
+        ]
+      },
+      "costs": {
+        "electricity_kWh": 0,
+        "water_m3": 0,
+        "energy_cost_usd": 0,
+        "water_cost_usd": 0,
+        "investment_usd": 30000.0,
+        "installed_kW": 0,
+        "season_scale": 120.0,
+        "season_electricity_kWh": 0.0,
+        "season_water_m3": 0.0,
+        "season_operating_usd": 0.0,
+        "season_capital_and_maintenance_usd": 3490.2686282773298,
+        "season_total_cost_usd": 3490.2686282773298,
+        "n_devices": 0
+      },
+      "ledgers": [],
+      "conservation": {
+        "energy_residual_J": -1.7642974853515625e-05,
+        "energy_gross_J": 58895852678.585556,
+        "energy_residual_rel": -2.9956226204583983e-16,
+        "water_residual_kg": -2.19570195358898e-11,
+        "water_gross_kg": 892.9777785840204,
+        "water_residual_rel": -2.45885396730775e-14,
+        "internal_cancellation_rel_max": 2.0330906624681124e-16,
+        "dry_air_imbalance_kg_s": 0.0,
+        "device_evaporated_kg": 0.0,
+        "evaporation_ode_to_quadrature_ratio": 1.0,
+        "stored_energy_change_J": 3307343.2651023865
+      },
+      "invalid_states": {
+        "negative_humidity": 0,
+        "supersaturated": 0,
+        "temperature_out_of_range": 0,
+        "non_finite": 0,
+        "surface_temperature_out_of_range": 0
+      },
+      "runtime_s": 0.6309539160001805,
+      "rhs_evaluations": 6461,
+      "comparison": {
+        "relief_Kph": 2208.2730155214153,
+        "baseline_burden_matched_Kph": 12890.299649822908,
+        "residual_burden_matched_Kph": 10682.026634301492,
+        "unmatched_person_hours": 0.0,
+        "incremental_kWh": 0,
+        "incremental_season_cost_usd": 3490.2686282773298,
+        "relief_per_kWh": null,
+        "season_relief_Kph": 264992.76186256984,
+        "relief_per_usd": 75.92331424454302,
+        "sections": {
+          "seating": {
+            "relief_Kph": 69.59151163441202,
+            "baseline_burden_matched_Kph": 5150.080527380784,
+            "residual_burden_matched_Kph": 5080.489015746373,
+            "unmatched_person_hours": 0.0
+          },
+          "plaza": {
+            "relief_Kph": 2106.1813794453437,
+            "baseline_burden_matched_Kph": 3764.043598589417,
+            "residual_burden_matched_Kph": 1657.8622191440732,
+            "unmatched_person_hours": 0.0
+          },
+          "concourse": {
+            "relief_Kph": 32.50012444165956,
+            "baseline_burden_matched_Kph": 3976.1755238527066,
+            "residual_burden_matched_Kph": 3943.6753994110472,
+            "unmatched_person_hours": 0.0
+          }
+        },
+        "worsened_sections": []
+      }
+    },
+    "full_mix_shade": {
+      "devices": [
+        "hvls_z1",
+        "hvls_z2",
+        "hvls_z3",
+        "evap_stalls",
+        "evap_gate_shared",
+        "evap_queue"
+      ],
+      "passive": [
+        "plaza_shade",
+        "cool_roof_seating"
+      ],
+      "metrics": {
+        "sections": {
+          "seating": {
+            "occupied_person_hours": 1905.5000000000002,
+            "assessed_person_hours": 1905.5000000000002,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 1548.105151105908,
+            "extrapolated_person_hours": 357.39484889409215,
+            "served_person_hours": 1823.6000000000001,
+            "burden_Kph": 2097.122500638637,
+            "meeting_person_hours": 851.5493639948893,
+            "attainment": 0.4468902461269426,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 1.1005628447329503
+          },
+          "plaza": {
+            "occupied_person_hours": 505.7,
+            "assessed_person_hours": 505.7,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 212.87541666666667,
+            "extrapolated_person_hours": 292.82458333333335,
+            "served_person_hours": 202.28,
+            "burden_Kph": 1488.9747540259107,
+            "meeting_person_hours": 80.67583333333333,
+            "attainment": 0.15953299057412168,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 2.9443835357443358
+          },
+          "concourse": {
+            "occupied_person_hours": 901.3,
+            "assessed_person_hours": 901.3,
+            "unassessed_person_hours": 0.0,
+            "supported_person_hours": 829.7606018518517,
+            "extrapolated_person_hours": 71.53939814814814,
+            "served_person_hours": 555.1700000000001,
+            "burden_Kph": 1512.2555989026673,
+            "meeting_person_hours": 267.3601712962963,
+            "attainment": 0.2966383793368427,
+            "unassessed_fraction": 0.0,
+            "burden_per_person_hour": 1.6778604226147424
+          }
+        },
+        "venue": {
+          "occupied_person_hours": 3312.5,
+          "assessed_person_hours": 3312.5,
+          "unassessed_person_hours": 0.0,
+          "supported_person_hours": 2590.741169624426,
+          "extrapolated_person_hours": 721.7588303755737,
+          "served_person_hours": 2581.05,
+          "burden_Kph": 5098.352853567216,
+          "meeting_person_hours": 1199.585368624519,
+          "attainment": 0.362138979207402,
+          "unassessed_fraction": 0.0,
+          "burden_per_person_hour": 1.5391253897561405
+        },
+        "poorly_served": [
+          "seating",
+          "plaza",
+          "concourse"
+        ]
+      },
+      "costs": {
+        "electricity_kWh": 171.2,
+        "water_m3": 2.0130745198428475,
+        "energy_cost_usd": 31.029999999999998,
+        "water_cost_usd": 5.0326862996071196,
+        "investment_usd": 81500.0,
+        "installed_kW": 10.7,
+        "season_scale": 120.0,
+        "season_electricity_kWh": 20544.0,
+        "season_water_m3": 241.5689423811417,
+        "season_operating_usd": 4327.522355952854,
+        "season_capital_and_maintenance_usd": 12234.98769344142,
+        "season_total_cost_usd": 16562.510049394274,
+        "n_devices": 6
+      },
+      "ledgers": [
+        {
+          "device": "hvls_z1",
+          "preset": "hvls_fan",
+          "kind": "fan",
+          "intake": "recirculate",
+          "schedule": "service_hours",
+          "serves": "seating:1.00",
+          "on_hours": 16.0,
+          "electric_power_kW": 1.5,
+          "electricity_kWh": 24.0,
+          "electricity_cost_usd": 4.35,
+          "evaporated_kg": 0.0,
+          "water_m3": 0.0,
+          "water_cost_usd": 0.0,
+          "capital_usd": 9000.0,
+          "lifetime_y": 15.0,
+          "maintenance_usd_y": 150.0
+        },
+        {
+          "device": "hvls_z2",
+          "preset": "hvls_fan",
+          "kind": "fan",
+          "intake": "recirculate",
+          "schedule": "service_hours",
+          "serves": "seating:1.00",
+          "on_hours": 16.0,
+          "electric_power_kW": 1.5,
+          "electricity_kWh": 24.0,
+          "electricity_cost_usd": 4.35,
+          "evaporated_kg": 0.0,
+          "water_m3": 0.0,
+          "water_cost_usd": 0.0,
+          "capital_usd": 9000.0,
+          "lifetime_y": 15.0,
+          "maintenance_usd_y": 150.0
+        },
+        {
+          "device": "hvls_z3",
+          "preset": "hvls_fan",
+          "kind": "fan",
+          "intake": "recirculate",
+          "schedule": "service_hours",
+          "serves": "seating:1.00",
+          "on_hours": 16.0,
+          "electric_power_kW": 1.5,
+          "electricity_kWh": 24.0,
+          "electricity_cost_usd": 4.35,
+          "evaporated_kg": 0.0,
+          "water_m3": 0.0,
+          "water_cost_usd": 0.0,
+          "capital_usd": 9000.0,
+          "lifetime_y": 15.0,
+          "maintenance_usd_y": 150.0
+        },
+        {
+          "device": "evap_stalls",
+          "preset": "large_evaporative_cooler",
+          "kind": "evaporative",
+          "intake": "outdoor",
+          "schedule": "service_hours",
+          "serves": "concourse:1.00",
+          "on_hours": 16.0,
+          "electric_power_kW": 2.5,
+          "electricity_kWh": 40.0,
+          "electricity_cost_usd": 7.25,
+          "evaporated_kg": 712.4023122879189,
+          "water_m3": 0.8192626591311067,
+          "water_cost_usd": 2.048156647827767,
+          "capital_usd": 5000.0,
+          "lifetime_y": 8.0,
+          "maintenance_usd_y": 400.0
+        },
+        {
+          "device": "evap_gate_shared",
+          "preset": "large_evaporative_cooler",
+          "kind": "evaporative",
+          "intake": "outdoor",
+          "schedule": "service_hours",
+          "serves": "seating:0.50;concourse:0.50",
+          "on_hours": 16.0,
+          "electric_power_kW": 2.5,
+          "electricity_kWh": 40.0,
+          "electricity_cost_usd": 7.25,
+          "evaporated_kg": 712.4023122879189,
+          "water_m3": 0.8192626591311067,
+          "water_cost_usd": 2.048156647827767,
+          "capital_usd": 5000.0,
+          "lifetime_y": 8.0,
+          "maintenance_usd_y": 400.0
+        },
+        {
+          "device": "evap_queue",
+          "preset": "evaporative_cooler",
+          "kind": "evaporative",
+          "intake": "outdoor",
+          "schedule": "service_hours",
+          "serves": "plaza:1.00",
+          "on_hours": 16.0,
+          "electric_power_kW": 1.2,
+          "electricity_kWh": 19.2,
+          "electricity_cost_usd": 3.4799999999999995,
+          "evaporated_kg": 325.6949578962037,
+          "water_m3": 0.3745492015806342,
+          "water_cost_usd": 0.9363730039515855,
+          "capital_usd": 2500.0,
+          "lifetime_y": 7.0,
+          "maintenance_usd_y": 250.0
+        }
+      ],
+      "conservation": {
+        "energy_residual_J": 1.0251998901367188e-05,
+        "energy_gross_J": 45117728294.523636,
+        "energy_residual_rel": 2.272277281879808e-16,
+        "water_residual_kg": -2.7045032879868813e-13,
+        "water_gross_kg": 3413.428418144954,
+        "water_residual_rel": -7.923128762889536e-17,
+        "internal_cancellation_rel_max": 3.101557751935098e-16,
+        "dry_air_imbalance_kg_s": 2.842170943040401e-14,
+        "device_evaporated_kg": 1750.4995824720418,
+        "evaporation_ode_to_quadrature_ratio": 1.0000002231016785,
+        "stored_energy_change_J": 2658476.5516166687
+      },
+      "invalid_states": {
+        "negative_humidity": 0,
+        "supersaturated": 0,
+        "temperature_out_of_range": 0,
+        "non_finite": 0,
+        "surface_temperature_out_of_range": 0
+      },
+      "runtime_s": 1.9056128749998607,
+      "rhs_evaluations": 6583,
+      "comparison": {
+        "relief_Kph": 7791.946796255692,
+        "baseline_burden_matched_Kph": 12890.299649822908,
+        "residual_burden_matched_Kph": 5098.352853567216,
+        "unmatched_person_hours": 0.0,
+        "incremental_kWh": 171.2,
+        "incremental_season_cost_usd": 16562.510049394274,
+        "relief_per_kWh": 45.51370792205428,
+        "season_relief_Kph": 935033.615550683,
+        "relief_per_usd": 56.45482555253629,
+        "sections": {
+          "seating": {
+            "relief_Kph": 3052.958026742148,
+            "baseline_burden_matched_Kph": 5150.080527380784,
+            "residual_burden_matched_Kph": 2097.122500638637,
+            "unmatched_person_hours": 0.0
+          },
+          "plaza": {
+            "relief_Kph": 2275.068844563506,
+            "baseline_burden_matched_Kph": 3764.043598589417,
+            "residual_burden_matched_Kph": 1488.9747540259107,
+            "unmatched_person_hours": 0.0
+          },
+          "concourse": {
+            "relief_Kph": 2463.9199249500393,
+            "baseline_burden_matched_Kph": 3976.1755238527066,
+            "residual_burden_matched_Kph": 1512.2555989026673,
+            "unmatched_person_hours": 0.0
+          }
+        },
+        "worsened_sections": []
+      }
+    }
+  }
+}

@@ -1,0 +1,53 @@
+# Test fixture: two connected sections under constant synthetic weather.
+include: [../../examples/common/physics_materials.yaml, ../../examples/common/devices.yaml, ../../examples/common/templates.yaml]
+meta: {name: "mini test venue", data_status: TEST_FIXTURE}
+site: {latitude_deg: 33.45, longitude_deg: -112.07, utc_offset_h: -7, day_of_year: 196}
+weather: {file: weather_const.csv}
+occupancy: {file: occupancy_mini.csv}
+simulation: {start_h: 0, end_h: 24, warmup_days: 1, output_step_s: 300}
+sections:
+  - id: A
+    name: "roofed A"
+    template: roofed_open_seating
+    footprint: [[0, 0], [5, 0], [5, 4], [0, 4]]
+    height_m: 3.0
+    exposure_groups: [{id: covered, occupant_share: 0.5}, {id: open, occupant_share: 0.5}]
+  - id: B
+    name: "sunny B"
+    template: sunny_open_space
+    footprint: [[0, -4], [5, -4], [5, 0], [0, 0]]
+    height_m: 2.5
+connections:
+  - id: AB
+    a: A
+    b: B
+    opening_area_m2: 12.0
+    wind_coefficient: {value: 0.05, unit: "-", source: "test"}
+    min_flow: {value: 0.5, unit: "m3/s", source: "test"}
+devices:
+  - {id: fan1, preset: fan_system, serves: [{section: A, airflow_fraction: 1.0, groups: [covered]}], schedule: service_hours}
+  - {id: fan_hour, preset: fan_system, serves: [{section: A, airflow_fraction: 1.0, groups: [covered]}], schedule: one_hour}
+  - {id: fan_never, preset: fan_system, serves: [{section: A, airflow_fraction: 1.0, groups: [covered]}], schedule: never}
+  - {id: evap_out, preset: evaporative_cooler, intake: outdoor, serves: [{section: A, airflow_fraction: 1.0, groups: [covered]}], schedule: service_hours}
+  - {id: evap_rec, preset: evaporative_cooler, intake: recirculate, serves: [{section: A, airflow_fraction: 1.0, groups: [covered]}], schedule: service_hours}
+  - id: shared
+    preset: large_evaporative_cooler
+    intake: outdoor
+    schedule: service_hours
+    serves: [{section: A, airflow_fraction: 0.6, groups: [covered]}, {section: B, airflow_fraction: 0.4}]
+  - {id: evap_rec2, preset: evaporative_cooler, intake: recirculate, serves: [{section: A, airflow_fraction: 1.0, groups: [covered]}], schedule: service_hours}
+schedules:
+  one_hour: {mode: hours, intervals: [[10, 11]]}
+  never: {mode: never}
+scenarios:
+  - {id: baseline}
+  - {id: fan, devices: [fan1]}
+  - {id: evap, devices: [evap_out]}
+  - {id: shared, devices: [shared]}
+search:
+  objective: energy
+  target: {min_attainment: 0.5, max_unassessed_fraction: 0.2}
+  constraints: {max_devices: 1}
+  slots:
+    - {id: s1, serves: [{section: A, airflow_fraction: 1.0, groups: [covered]}], options: [none, fan_system, evaporative_cooler]}
+  schedules: [service_hours]

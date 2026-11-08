@@ -1,0 +1,156 @@
+# Example 2 - semi-open rail-station waiting area (HiMCM 2026 Problem B, requirement 2b).
+# SYNTHETIC DEMONSTRATION. Changes vs the bus stop: three connected sections with different
+# enclosure, a semi-enclosed room whose air is partly retained (so recirculating evaporative
+# cooling humidifies it), a device shared by two sections, and walls with thermal storage.
+include: [common/physics_materials.yaml, common/devices.yaml, common/templates.yaml]
+
+meta:
+  name: "Semi-open rail-station waiting area"
+  description: "Open platform end, canopy-covered platform, and a semi-enclosed waiting room with door openings."
+  data_status: SYNTHETIC_DEMONSTRATION
+  notes:
+    - "large_evap_shared sits in the doorway and splits its airflow 60/40 between waiting room and canopy; one ledger."
+    - "evap_wait_out (outdoor intake) and evap_wait_recirc (recirculation) are the same hardware with different intake."
+
+site: {latitude_deg: 33.45, longitude_deg: -112.07, utc_offset_h: -7, day_of_year: 196}
+weather: {file: data/weather_hot_dry.csv}
+occupancy: {file: data/occupancy_rail_station.csv}
+simulation: {start_h: 0, end_h: 24, warmup_days: 2, output_step_s: 300}
+
+sections:
+  - id: platform_open
+    name: "Open platform end (sunny)"
+    template: sunny_open_space
+    footprint: [[0, 0], [20, 0], [20, 4], [0, 4]]
+    height_m: 3.0
+    occupancy: {met: {value: 1.3, unit: "met", source: "ASHRAE 55 standing, slight movement", bounds: [1.2, 1.6]}}
+
+  - id: platform_canopy
+    name: "Canopy platform"
+    template: roofed_open_seating
+    footprint: [[20, 0], [60, 0], [60, 5], [20, 5]]
+    height_m: 4.5
+    sun: {mode: canopy, canopy_height_m: 4.5, canopy_depth_m: 5.0,
+          open_side_fraction: {value: 0.5, unit: "-", source: "DEMO-ASSUMPTION: track side open", bounds: [0.3, 0.7]}}
+    outdoor:
+      opening_area_m2: 120.0
+      wind_coefficient: {value: 0.06, unit: "-", source: "DEMO-ASSUMPTION: long canopy, track-side open", bounds: [0.03, 0.12]}
+      min_flow: {value: 3.0, unit: "m3/s", source: "DEMO-ASSUMPTION: train-induced and buoyant exchange floor", bounds: [1.5, 6.0]}
+    occupancy:
+      met: {value: 1.2, unit: "met", source: "ASHRAE 55 standing relaxed", bounds: [1.0, 1.4]}
+      posture: standing
+    exposure_groups:
+      - {id: bench_rows, occupant_share: 0.5}
+      - {id: platform_edge, occupant_share: 0.5}
+
+  - id: waiting_room
+    name: "Semi-enclosed waiting room"
+    template: partially_enclosed_waiting
+    footprint: [[30, 5], [40, 5], [40, 11], [30, 11]]
+    height_m: 3.5
+    surfaces:
+      - id: back_wall
+        kind: wall
+        material: brick
+        thickness: {value: 0.2, unit: "m", source: "DEMO-ASSUMPTION"}
+        nodes: 2
+        area_m2: 35.0
+        azimuth_deg: 0
+        emissivity: {value: 0.9, unit: "-", source: "brick"}
+        solar_absorptance_exterior: {value: 0.65, unit: "-", source: "red brick (typical)", bounds: [0.55, 0.75]}
+        exterior_sky_fraction: 0.5
+      - id: side_walls
+        kind: wall
+        material: brick
+        thickness: {value: 0.2, unit: "m", source: "DEMO-ASSUMPTION"}
+        nodes: 2
+        area_m2: 42.0
+        azimuth_deg: 90
+        emissivity: {value: 0.9, unit: "-", source: "brick"}
+        solar_absorptance_exterior: {value: 0.65, unit: "-", source: "red brick (typical)", bounds: [0.55, 0.75]}
+        exterior_sky_fraction: 0.5
+      - id: glazed_front
+        kind: wall
+        material: glass
+        thickness: {value: 12, unit: "mm", source: "DEMO-ASSUMPTION: laminated glazing"}
+        nodes: 1
+        area_m2: 27.0
+        azimuth_deg: 180
+        emissivity: {value: 0.84, unit: "-", source: "glass"}
+        solar_absorptance_exterior: {value: 0.2, unit: "-", source: "laminated clear glass absorbed share"}
+        exterior_sky_fraction: 0.5
+    exposure_groups:
+      - {id: near_unit, occupant_share: 0.5}
+      - {id: room_rest, occupant_share: 0.5}
+
+connections:
+  - id: open_canopy
+    a: platform_open
+    b: platform_canopy
+    opening_area_m2: 22.5
+    wind_coefficient: {value: 0.08, unit: "-", source: "DEMO-ASSUMPTION: open platform cross-section", bounds: [0.04, 0.15]}
+    min_flow: {value: 1.0, unit: "m3/s", source: "DEMO-ASSUMPTION", bounds: [0.5, 2.0]}
+  - id: canopy_waiting
+    a: platform_canopy
+    b: waiting_room
+    opening_area_m2: 8.0
+    wind_coefficient: {value: 0.03, unit: "-", source: "DEMO-ASSUMPTION: two open double doors", bounds: [0.01, 0.06]}
+    min_flow: {value: 0.4, unit: "m3/s", source: "DEMO-ASSUMPTION: door-opening exchange floor", bounds: [0.2, 0.8]}
+
+devices:
+  - {id: fan_bench_1, preset: fan_system, serves: [{section: platform_canopy, airflow_fraction: 1.0, groups: [bench_rows]}], schedule: service_hours}
+  - {id: fan_bench_2, preset: fan_system, serves: [{section: platform_canopy, airflow_fraction: 1.0, groups: [bench_rows]}], schedule: service_hours}
+  - {id: evap_wait_out, preset: evaporative_cooler, intake: outdoor, serves: [{section: waiting_room, airflow_fraction: 1.0, groups: [near_unit]}], schedule: service_hours}
+  - {id: evap_wait_recirc, preset: evaporative_cooler, intake: recirculate, serves: [{section: waiting_room, airflow_fraction: 1.0, groups: [near_unit]}], schedule: service_hours}
+  - id: large_evap_shared
+    preset: large_evaporative_cooler
+    intake: outdoor
+    schedule: service_hours
+    serves:
+      - {section: waiting_room, airflow_fraction: 0.6, groups: [near_unit, room_rest]}
+      - {section: platform_canopy, airflow_fraction: 0.4, groups: [bench_rows]}
+  - {id: fan_wait, preset: fan_system, serves: [{section: waiting_room, airflow_fraction: 1.0, groups: [near_unit]}], schedule: service_hours}
+
+passive_options:
+  - id: cool_canopy
+    description: "Reflective coating on the platform canopy"
+    set: {"sections[platform_canopy].surfaces[roof].solar_absorptance_exterior": {value: 0.3, unit: "-", source: "DEMO-ASSUMPTION: aged white coating", bounds: [0.2, 0.4]}}
+    capital_cost: {value: 4000, unit: "USD", source: "DEMO-ASSUMPTION: 220 m2 coating"}
+    lifetime: {value: 6, unit: "year", source: "DEMO-ASSUMPTION"}
+    maintenance: {value: 100, unit: "USD/year", source: "DEMO-ASSUMPTION"}
+  - id: shade_open_end
+    description: "Shade structure over the open platform end"
+    set: {"sections[platform_open].sun.shade_multiplier": {value: 0.35, unit: "-", source: "DEMO-ASSUMPTION: perforated shade, 65% beam blocked", bounds: [0.25, 0.5]}}
+    capital_cost: {value: 9000, unit: "USD", source: "DEMO-ASSUMPTION"}
+    lifetime: {value: 15, unit: "year", source: "DEMO-ASSUMPTION"}
+    maintenance: {value: 150, unit: "USD/year", source: "DEMO-ASSUMPTION"}
+
+scenarios:
+  - {id: baseline}
+  - {id: fans_bench, description: "Two fan systems over canopy benches", devices: [fan_bench_1, fan_bench_2]}
+  - {id: evap_waiting_outdoor, description: "Evaporative cooler in waiting room, outdoor-air intake", devices: [evap_wait_out]}
+  - {id: evap_waiting_recirc, description: "Same cooler, recirculating room air", devices: [evap_wait_recirc]}
+  - {id: shared_large_evap, description: "Large cooler in doorway serving waiting room + canopy", devices: [large_evap_shared]}
+  - {id: fans_plus_evap, description: "Bench fans + waiting-room cooler (outdoor intake)", devices: [fan_bench_1, fan_bench_2, evap_wait_out]}
+  - {id: fan_waiting, description: "Fan system in waiting room", devices: [fan_wait]}
+  - {id: shade_plus_shared, description: "Open-end shade + shared large cooler", devices: [large_evap_shared], passive: [shade_open_end]}
+
+search:
+  objective: energy
+  target: {min_attainment: 0.55, min_section_attainment: 0.2, max_unassessed_fraction: 0.05}
+  constraints: {max_devices: 4, max_investment_usd: 25000, max_water_m3_per_day: 6.0}
+  slots:
+    - {id: canopy_bench, serves: [{section: platform_canopy, airflow_fraction: 1.0, groups: [bench_rows]}], options: [none, fan_system, evaporative_cooler, large_evaporative_cooler]}
+    - {id: canopy_edge, serves: [{section: platform_canopy, airflow_fraction: 1.0, groups: [platform_edge]}], options: [none, fan_system, evaporative_cooler]}
+    - {id: waiting, serves: [{section: waiting_room, airflow_fraction: 1.0, groups: [near_unit, room_rest]}], options: [none, fan_system, evaporative_cooler, large_evaporative_cooler]}
+    - id: doorway_shared
+      serves: [{section: waiting_room, airflow_fraction: 0.6, groups: [near_unit, room_rest]}, {section: platform_canopy, airflow_fraction: 0.4, groups: [bench_rows]}]
+      options: [none, large_evaporative_cooler]
+  schedules: [service_hours, peak_afternoon, occupied_hot]
+  passive_options: [cool_canopy, shade_open_end]
+
+uncertainty:
+  samples: 64
+  seed: 2026
+  parameters: all
+  scenarios: [fans_bench, evap_waiting_outdoor, evap_waiting_recirc, shared_large_evap]

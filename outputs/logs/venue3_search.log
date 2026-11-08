@@ -1,0 +1,25 @@
+search: 11254 candidate configurations, 11 workers -> /Users/ian/Desktop/Homework/COMAP/COMAP_Simulation/outputs/venue3/hot_dry/search/search_results.csv
+  1125/11254 done (193.1 s)
+  2250/11254 done (392.6 s)
+  3375/11254 done (620.3 s)
+  4500/11254 done (841.4 s)
+  5625/11254 done (1045.6 s)
+  6750/11254 done (1249.0 s)
+  7875/11254 done (1454.0 s)
+  9000/11254 done (1660.9 s)
+  10125/11254 done (1868.0 s)
+  11250/11254 done (2074.2 s)
+{
+ "n_candidates": 11254,
+ "workers": 11,
+ "wall_s": 2075.112190416,
+ "mean_candidate_s": 2.0215602709633864,
+ "status_counts": {
+  "meets_target": 887,
+  "physical_shortfall": 9807,
+  "unsupported_evaluation": 0,
+  "constraint_violation": 560
+ }
+}
+SELECTED: conc_stalls=evaporative_coolerx1,conc_corridor=evaporative_coolerx1,gate_shared=large_evaporative_coolerx1@occupied_hot+plaza_shade  kWh/day=71.10  season cost=$9098  attainment=0.606
+verification: {'method': 'independent re-simulation in a fresh process state with rtol=1e-8 and 150 s output step', 'status': 'meets_target', 'attainment': 0.6080735158632931, 'electricity_kWh': 71.1, 'attainment_difference': 0.0016093894279297638, 'confirmed': True}

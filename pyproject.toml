@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "venuecool"
+version = "0.1.0"
+description = "Section-resolved transient cooling assessment for open-air and semi-open venues"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "pandas>=2.1",
+  "pyyaml>=6",
+  "pydantic>=2.5",
+  "pythermalcomfort>=4.8",
+]
+
+[project.optional-dependencies]
+dashboard = ["streamlit>=1.30", "plotly>=5.18"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+venuecool = "venuecool.cli:main"
+
+[tool.setuptools]
+packages = ["venuecool"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::UserWarning"]

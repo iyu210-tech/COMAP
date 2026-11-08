@@ -1,0 +1,5 @@
+scenario,device,preset,claim,section,covered_group,max_section_mean_air_drop_K,mean_section_mean_air_drop_K,max_covered_zone_air_drop_K,max_covered_zone_SET_drop_K,min_covered_zone_SET_drop_K
+A_fan,fan_A,fan_system,"Makes space feel up to 3 C cooler (supplied claim, conditional)",shelter,bench_zone,-0.02465106492529401,-0.03535442145397664,-0.02465106492529401,0.8673674840294936,0.3253444388216167
+B_evap,evap_B,evaporative_cooler,"Lowers air temperature up to 5 C (supplied claim, conditional on dry air)",shelter,bench_zone,4.6296005254812655,4.456108217919867,7.492131192129591,4.5367979084299925,3.046793292700052
+C_large_evap,evap_C,large_evaporative_cooler,"Lowers air temperature up to 8 C (supplied claim, conditional on dry air)",shelter,bench_zone,7.852995301677737,7.404709142855413,11.267433881715736,7.170026132457199,5.121767765820103
+B_evap_occupied_hot,evap_B_hot,evaporative_cooler,"Lowers air temperature up to 5 C (supplied claim, conditional on dry air)",shelter,bench_zone,4.62926199145322,4.470264609061192,7.4919259586247975,4.13151859285691,2.9917522589875567

@@ -1,0 +1,11 @@
+scenario,device,preset,kind,intake,schedule,serves,on_hours,electric_power_kW,electricity_kWh,electricity_cost_usd,evaporated_kg,water_m3,water_cost_usd,capital_usd,lifetime_y,maintenance_usd_y
+fans_bench,fan_bench_1,fan_system,fan,recirculate,service_hours,platform_canopy:1.00,16.0,0.25,4.0,0.725,0.0,0.0,0.0,600.0,8.0,40.0
+fans_bench,fan_bench_2,fan_system,fan,recirculate,service_hours,platform_canopy:1.00,16.0,0.25,4.0,0.725,0.0,0.0,0.0,600.0,8.0,40.0
+evap_waiting_outdoor,evap_wait_out,evaporative_cooler,evaporative,outdoor,service_hours,waiting_room:1.00,16.0,1.2,19.2,3.4799999999999995,325.6949278373828,0.37454916701299024,0.9363729175324755,2500.0,7.0,250.0
+evap_waiting_recirc,evap_wait_recirc,evaporative_cooler,evaporative,recirculate,service_hours,waiting_room:1.00,16.0,1.2,19.2,3.4799999999999995,219.98232636327214,0.25297967531776294,0.6324491882944073,2500.0,7.0,250.0
+shared_large_evap,large_evap_shared,large_evaporative_cooler,evaporative,outdoor,service_hours,waiting_room:0.60;platform_canopy:0.40,16.0,2.5,40.0,7.25,712.4022671569095,0.8192626072304459,2.0481565180761145,5000.0,8.0,400.0
+fans_plus_evap,fan_bench_1,fan_system,fan,recirculate,service_hours,platform_canopy:1.00,16.0,0.25,4.0,0.725,0.0,0.0,0.0,600.0,8.0,40.0
+fans_plus_evap,fan_bench_2,fan_system,fan,recirculate,service_hours,platform_canopy:1.00,16.0,0.25,4.0,0.725,0.0,0.0,0.0,600.0,8.0,40.0
+fans_plus_evap,evap_wait_out,evaporative_cooler,evaporative,outdoor,service_hours,waiting_room:1.00,16.0,1.2,19.2,3.4799999999999995,325.69492902488173,0.37454916837861396,0.9363729209465349,2500.0,7.0,250.0
+fan_waiting,fan_wait,fan_system,fan,recirculate,service_hours,waiting_room:1.00,16.0,0.25,4.0,0.725,0.0,0.0,0.0,600.0,8.0,40.0
+shade_plus_shared,large_evap_shared,large_evaporative_cooler,evaporative,outdoor,service_hours,waiting_room:0.60;platform_canopy:0.40,16.0,2.5,40.0,7.25,712.4022700849025,0.8192626105976378,2.0481565264940946,5000.0,8.0,400.0
