@@ -9,6 +9,7 @@
     venuecool calibrate  CONFIG [--out DIR]
     venuecool refine     CONFIG [--scenario ID]
     venuecool report     CONFIG [--weather CSV] [--scenarios a,b] [--out DIR]
+    venuecool robust     CONFIG [--weather CSV] [--out DIR]
     venuecool examples   [--out DIR]          # every example x both synthetic climates
 """
 
@@ -100,6 +101,20 @@ def cmd_report(args):
     for name, p in paths.items():
         print(f"  {name}: {p}")
     print(f"({time.perf_counter() - t:.1f} s)")
+
+
+def cmd_robust(args):
+    """Re-simulate the single-zone shelter under airflow, solar and coverage assumptions."""
+    from .robustness import run_robustness
+    s = _study(args)
+    out = _default_out(args, "robustness")
+    df = run_robustness(s, out)
+    winners = df[df["preferred"]][["case", "target_C", "preferred_scenario", "relief_Kph",
+                                   "supported_person_hours", "extrapolated_person_hours"]]
+    with pd.option_context("display.width", 200, "display.max_columns", 20):
+        print(winners.round(3).to_string(index=False))
+    print(f"preferred system changes across the table: {df.loc[df.preferred, 'preferred_scenario'].nunique() > 1}")
+    print(f"wrote {out}")
 
 
 def cmd_search(args):
@@ -255,6 +270,7 @@ def main(argv=None):
     sp.add_argument("--scenarios", default=None,
                     help="comma-separated interventions (baseline always included); "
                          "default A_fan,B_evap,C_large_evap")
+    add("robust", cmd_robust)
     sp = add("search", cmd_search)
     sp.add_argument("--workers", type=int, default=None)
     sp.add_argument("--limit", type=int, default=None)

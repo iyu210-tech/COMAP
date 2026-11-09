@@ -43,8 +43,8 @@ def section_intervals(df: pd.DataFrame, target: float) -> pd.DataFrame:
     return g.reset_index()
 
 
-def summarize(df: pd.DataFrame, cfg) -> dict:
-    target = cfg.comfort.target.value
+def summarize(df: pd.DataFrame, cfg, target: float | None = None) -> dict:
+    target = cfg.comfort.target.value if target is None else float(target)
     si = section_intervals(df, target)
     out = {"sections": {}}
 

@@ -1,0 +1,917 @@
+# PART1_overview_and_config.txt
+# Plain-text pack. Each section starts with ===== FILE: path =====
+
+
+===== FILE: README.md =====
+# VenueCool
+
+VenueCool is a section-resolved, transient tool for assessing cooling options in open-air and
+semi-open venues, built around the HiMCM 2026 Problem B setting. A venue is modelled as
+connected **sections**, such as a shelter, a curb, a platform under a canopy, or a waiting room.
+Each section has its own geometry, surfaces, sun exposure, occupants and devices, and exchanges
+air with the outdoors and its neighbours.
+
+For each candidate intervention, VenueCool simulates the venue and a *matched* baseline under
+identical weather and occupancy. It then reports:
+
+* discomfort burden, as SET above a target, integrated over person-hours;
+* relief, which may be negative;
+* attainment and poorly served sections;
+* electricity (kWh), water and season cost;
+* relief per kWh and per USD;
+* which person-hours could and could not be assessed.
+
+> **Status of results.** Every example input in this repository is **synthetic demonstration
+> data** (labelled `SYNTHETIC_DEMONSTRATION` in the files). The outputs demonstrate the method;
+> they are not predictions for a real site. VenueCool reports thermal-comfort indices, not heat
+> safety, and it never invents satisfaction percentages.
+
+Equations, assumptions and limitations are in [`docs/MODEL.md`](docs/MODEL.md).
+
+## Install
+
+```bash
+cd COMAP_Simulation
+python3.13 -m venv .venv            # Python >= 3.10 should work; developed on 3.13
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -e ".[dashboard,dev]"      # optional: adds the `venuecool` command
+export NUMBA_CACHE_DIR=$PWD/.numba_cache          # pythermalcomfort uses numba; see note
+```
+
+`venuecool/__init__.py` sets `NUMBA_CACHE_DIR` itself if it is unset. Exporting it in the
+shell is still recommended for sandboxed or read-only environments. All commands below use
+`.venv/bin/python -m venuecool`, which works without the editable install, from the repository
+root.
+
+## Exact commands
+
+```bash
+# software/physics checks (36 tests, ~30 s)
+.venv/bin/python -m pytest -q
+
+# regenerate the synthetic weather + occupancy inputs (already committed)
+.venv/bin/python examples/make_synthetic_inputs.py
+
+# validate a configuration and print the provenance of every quantity
+.venv/bin/python -m venuecool validate examples/bus_stop.yaml
+
+# single-zone Problem B slice: one shelter, baseline + fan + two evaporative coolers,
+# CSV exports + Tair / RH / SET / cumulative-kWh graphs
+.venv/bin/python -m venuecool report examples/bus_shelter_single.yaml
+# assumptions: docs/ASSUMPTIONS_SINGLE_ZONE.md
+# airflow / solar / coverage bounds and SET targets 28, 30, 32 C
+.venv/bin/python -m venuecool robust examples/bus_shelter_single.yaml
+# what changed: docs/IMPROVEMENTS.md
+
+# baseline + every scenario in the config, with exports
+.venv/bin/python -m venuecool compare examples/bus_stop.yaml --weather examples/data/weather_hot_dry.csv
+
+# all three examples under both synthetic climates -> outputs/examples_overview.csv  (~70 s)
+.venv/bin/python -m venuecool examples
+
+# bounded configuration search (parallel); --limit N for a quick trial
+.venv/bin/python -m venuecool search examples/bus_stop.yaml --weather examples/data/weather_hot_dry.csv --workers 11
+.venv/bin/python -m venuecool search examples/rail_station.yaml --workers 11
+.venv/bin/python -m venuecool search examples/venue3.yaml --workers 11
+
+# seeded Latin-hypercube uncertainty with matched draws, and a one-at-a-time sweep
+.venv/bin/python -m venuecool uncertainty examples/bus_stop.yaml --weather examples/data/weather_hot_dry.csv --samples 128 --workers 11
+.venv/bin/python -m venuecool sweep examples/bus_stop.yaml --scenario B_evap --workers 11
+
+# checks of device presets against the problem's quoted effects; numerical refinement; runtime
+.venv/bin/python -m venuecool calibrate examples/bus_stop.yaml
+.venv/bin/python -m venuecool refine examples/bus_stop.yaml --scenario B_evap
+.venv/bin/python -m venuecool benchmark examples/venue3.yaml --runs 22 --workers 11
+
+# dashboard
+.venv/bin/streamlit run app/dashboard.py
+```
+
+Multiprocessing (`--workers > 1`) uses `ProcessPoolExecutor`. Some sandboxes forbid the POSIX
+semaphores this needs. In that case use `--workers 1`.
+
+Outputs go to `outputs/<config>/<weather tag>/<command>/` unless `--out` is given. The weather
+tag comes from the weather file (`weather_hot_dry.csv` becomes `hot_dry`); when there is no
+`--weather`, the configuration's own weather file is used. The dashboard reads saved search and
+uncertainty results from the same place.
+
+## Repository layout
+
+| path | contents |
+|---|---|
+| `venuecool/` | the engine; one module per concern (see table below) |
+| `app/dashboard.py` | Streamlit + Plotly dashboard |
+| `examples/*.yaml` | single-zone bus shelter, two-section bus stop, rail station, three-section venue |
+| `docs/ASSUMPTIONS_SINGLE_ZONE.md` | labelled DEMO-ASSUMPTIONS for the single-zone Problem B slice |
+| `examples/common/` | shared physics, materials, tariffs, device presets, section templates |
+| `examples/data/` | synthetic weather (hot/dry, warm/humid) and occupancy CSVs |
+| `tests/` | software and physics checks with a small two-section test venue |
+| `docs/MODEL.md` | equations, assumptions, limitations, extension points |
+| `outputs/` | the actual outputs produced by the commands above |
+
+| module | role |
+|---|---|
+| `quantity.py`, `config.py` | units, provenance and bounds; YAML/JSON schema; includes, templates, overrides |
+| `inputs.py`, `solar.py` | weather/occupancy CSV loading and checks; solar geometry |
+| `psychro.py` | moist-air properties, wet bulb, validity flags (no clipping) |
+| `airflow.py` | pluggable air-exchange providers (parametric, tabulated from measurements or CFD) |
+| `devices.py` | fan and direct-evaporative outlet states |
+| `model.py` | coupled ODE system, segmented SciPy integration, ledgers, conservation |
+| `comfort.py` | MRT (longwave plus SolarCal solar), SET, applicability classes |
+| `metrics.py` | burden, matched relief, attainment, costs |
+| `runner.py` | `Study` (baseline and scenario runs), exports |
+| `search.py`, `uncertainty.py` | bounded parallel search; LHS uncertainty and sensitivity |
+| `calibrate.py`, `cli.py` | preset checks; command-line interface |
+
+## Configuration
+
+A venue file is YAML or JSON. It can `include:` shared files; the including file wins, and lists
+of `id`-keyed items merge by id. Every physical number is a quantity:
+
+```yaml
+saturation_effectiveness: {value: 0.75, unit: "-", source: "assumed typical rigid-media pad (demonstration)", bounds: [0.6, 0.85]}
+```
+
+* The unit must match, or be convertible to, the field's canonical unit. A `kWh` where `W` is
+  expected is rejected.
+* `source` is mandatory.
+* `bounds` makes the quantity part of the uncertainty analysis, and the nominal value must lie
+  inside them.
+* Unknown keys are errors, so typos cannot silently fall back to defaults.
+
+Missing required data (weather columns, NaNs, gaps over 3 h, a run outside the weather period,
+a missing occupancy column) raises an error. Nothing is filled in silently.
+
+Key blocks:
+
+* `sections`: each section, possibly from a `template`, keeps its own id. A section has:
+  * a footprint polygon, height and volume;
+  * `surfaces` (roof, floor, walls) built from `materials`;
+  * `sun` exposure (`constant` / `schedule` / `canopy`) and an `outdoor` exchange;
+  * `occupancy` (CSV column, met, clo);
+  * `exposure_groups` (share of occupants and which devices cover them);
+  * `radiation` view factors and `initial` conditions.
+* `connections`: openings between sections.
+* `device_presets` and `devices`: physical devices with unique ids. A device has `serves`
+  (sections with airflow fractions summing to 1), `intake` (outdoor or recirculated), a
+  schedule, and optional per-device overrides.
+* `passive_options`: named path overrides, e.g.
+  `sections[shelter].surfaces[roof].solar_absorptance_exterior`, with capital cost.
+* `scenarios`, `search`, `uncertainty`: what to compare, search and sample.
+
+Weather and occupancy files are CSVs with `# key: value` metadata headers (data status, site).
+
+## Demonstration results (synthetic inputs, one design day scaled to a 120-day season)
+
+Comfort target: SET ≤ 30 °C. "Relief" is the reduction in K·person-hours above target
+against the matched baseline. Full table: `outputs/examples_overview.csv`.
+
+Bus stop (hot/dry):
+
+| scenario | attainment | relief (K·ph/day) | kWh/day | water m³/day | season cost USD |
+|---|---|---|---|---|---|
+| baseline | 0.26 | 0 | 0 | 0 | 0 |
+| A: fan (0.25 kW) | 0.29 | 19.8 | 4.0 | 0 | 220 |
+| B: evaporative (1.2 kW) | 0.52 | 91.2 | 19.2 | 1.28 | 1482 |
+| C: large evaporative (2.5 kW) | 0.65 | 137.5 | 40.0 | 2.79 | 2882 |
+| B + curb shade sail | 0.62 | 149.0 | 19.2 | 1.28 | 1775 |
+
+Under warm/humid weather, B's relief falls from 91 to 64 K·ph, and its water use falls more
+sharply, from 1.28 to 0.38 m³. The fan's relief rises from 20 to 40 K·ph, because in dry heat
+above skin temperature extra air speed helps less. The fan slightly *worsens* the unshaded curb
+through motor heat in the shared air, and this negative contribution is kept.
+
+`venuecool calibrate` compares the presets with the problem's quoted effects:
+
+* the shelter-mean air drop is 4.6 K for B (claim "up to 5 °C") and 7.9 K for C (claim "up
+  to 8 °C");
+* the fan's SET reduction against still air is 2.5–3.7 K (claim "feels up to 3 °C"), but only
+  0.3–0.9 K in the already breezy simulated shelter.
+
+Search outcomes (`outputs/<example>/hot_dry/search/search_summary.json`); the selected
+configuration is re-simulated at tighter tolerance before being reported:
+
+* **Bus stop**: 160 candidates in 23 s. 5 meet the target, 51 are physical shortfalls, and 104
+  violate the water constraint. The selected configuration is one evaporative cooler,
+  11:00–19:00, plus the curb shade sail: 9.6 kWh/day, about 1,430 USD/season.
+* **Rail station**: 1,096 candidates in 194 s, of which 595 meet the target. The selected
+  configuration is one evaporative cooler in the waiting room (06:00–22:00) plus shade at the
+  open platform end: 19.2 kWh/day.
+* **Three-section venue**: 11,254 candidates over 7 slots in 35 min on 11 workers. 887 meet the
+  target, 9,807 are physical shortfalls, and 560 violate constraints; none was unsupported.
+  * The selected configuration is two evaporative coolers in the concourse (stalls and
+    corridor), plus the shared gate cooler (large) running only when hot, plus the plaza shade.
+  * It uses 71.1 kWh/day and costs about 9,100 USD/season, with attainment 0.61.
+  * The independent re-simulation reproduced the attainment within 0.002.
+
+Uncertainty, hot/dry, with matched LHS draws. Relief is in K·ph per day, given as 5–95% ranges.
+No draw in any example gave negative relief.
+
+| example | draws, parameters | scenario | relief, 5–95% |
+|---|---|---|---|
+| bus stop | 128 draws, 38 parameters | A (fan) | 8–50 |
+| | | B (evaporative) | 59–115 |
+| | | C (large evaporative) | 93–190 |
+| rail station | 96 draws, 50 parameters | shared large cooler | 717–1305 |
+| | | outdoor-intake waiting-room cooler | 343–641 |
+| | | recirculating waiting-room cooler | 356–640 |
+| three-section venue | 64 draws, 53 parameters | concourse evaporative | 2106–3444 |
+
+The two waiting-room variants are statistically indistinguishable in relief. The recirculating
+one uses about 35% less water.
+
+The dominant drivers, consistent between Spearman ranks and the one-at-a-time sweep
+(`outputs/bus_stop/hot_dry/sweep/`), are:
+
+* the local wind factor (how breezy the section already is);
+* the open-side sun fraction;
+* clothing insulation;
+* the coverage air speed of the device.
+
+Two kinds of correlation are flagged rather than reported as drivers:
+
+* correlations within the noise level (≈ 2/√n);
+* correlations with parameters the scenario cannot depend on (unused presets, devices and
+  passive options), which are pure sampling noise.
+
+Numerics:
+
+* Halving the tolerance and output step changes relief by under 0.3%.
+* Conservation residuals are at round-off level.
+* A three-section run takes about 0.8 s, and 11 workers give about 8.6 runs/s.
+
+## Checks vs validation
+
+`pytest` runs **verification** checks:
+
+* unit handling, schema rejection, bounds and include merging;
+* psychrometric reference values and the wet-bulb limit;
+* conservative mixing between sealed sections;
+* a 0.25 kW fan for one hour giving 0.25 kWh;
+* a fan adding air speed but no outdoor exchange or cooling;
+* the evaporative water ledger matching the moisture added;
+* recirculation in a sealed room humidifying the air and weakening the cooling;
+* a shared device counted once, and overlapping coverage not double counting beneficiaries;
+* an idle device reproducing the baseline exactly;
+* negative relief kept, occupancy integrated exactly, ratios formed after summing;
+* numerical refinement and periodic warm-up;
+* search status reporting, including "no configuration meets target", and matched draws.
+
+These checks confirm the code implements the stated model. **They are not validation against
+measurements**: no field data were available. `docs/MODEL.md` §11 lists the measurements
+needed for validation.
+
+## Extending
+
+* **Airflows**: provide a `TableAirflow` CSV from measurements or CFD
+  (`airflow: {provider: table, file: flows.csv, source: "..."}`, with columns `wind_ms`,
+  `out:<section>`, `conn:<connection>` in m³/s). Missing columns or negative values raise errors.
+* **Device plumes**: set per-device `plume_fraction` and `covered_air_speed` overrides.
+* **Geometry**: sections accept 2D polygons and explicit surfaces, which is where a CAD
+  importer would plug in.
+* **Comfort models**: add another index in `comfort._set`.
+
+
+===== FILE: docs/ASSUMPTIONS_SINGLE_ZONE.md =====
+# Single-zone bus shelter: labelled assumptions
+
+This note lists the free parameters used by
+[`examples/bus_shelter_single.yaml`](../examples/bus_shelter_single.yaml). Equations and the
+full model are in [`MODEL.md`](MODEL.md). Electrical draws **0.25 / 1.2 / 2.5 kW** are supplied
+by the problem statement; everything else below is a **DEMO-ASSUMPTION** unless marked otherwise.
+
+## Weather and occupancy
+
+| Item | Status |
+|---|---|
+| Hot/dry 24 h weather (`examples/data/weather_hot_dry.csv`) | `SYNTHETIC_DEMONSTRATION` — Phoenix-like geometry, not a measured day |
+| Occupancy (`examples/data/occupancy_bus_shelter_single.csv`) | `SYNTHETIC_DEMONSTRATION` — mean people present per hour under the canopy |
+
+## Geometry and surfaces
+
+| Item | Assumption |
+|---|---|
+| Footprint | 4 m × 1.8 m open-sided shelter, height 2.6 m |
+| Roof | Polycarbonate, absorbed share 0.5 (transmission neglected) |
+| Rear panel | Glass wall, 8 m² |
+| Floor / ground | Concrete slab with deep-ground temperature 28 °C |
+| Sun | Canopy mode; open-side fraction 0.5 toward low sun |
+
+## Outdoor air exchange
+
+Parametric form \(Q = Q_{\min} + C_w A_{\mathrm{open}} U_{10}\) (no CFD):
+
+| Parameter | Nominal | Notes |
+|---|---|---|
+| Opening area | 14 m² | Three open sides of the shelter |
+| Wind coefficient \(C_w\) | 0.10 (template) | Open-side exchange; bounds 0.04–0.2 |
+| Min flow | 0.5 m³/s | Calm-condition floor |
+| Local wind factor | 0.35 | Occupant-level speed / 10 m wind under a roof |
+
+## Equipment (airflow and coverage — not supplied by the problem)
+
+The problem gives electrical draw and qualitative claims ("feels up to 3 °C", "up to 5 / 8 °C").
+It does **not** fix airflow or coverage. VenueCool uses:
+
+| Preset | Power (supplied) | Airflow | Coverage speed | Effectiveness / plume |
+|---|---|---|---|---|
+| Fan | 0.25 kW | 2.5 m³/s | 1.3 m/s | plume = 0 (local air = section air) |
+| Evaporative | 1.2 kW | 3.0 m³/s | 1.0 m/s | ε_sat = 0.75, plume = 0.25 |
+| Large evaporative | 2.5 kW | 6.0 m³/s | 1.3 m/s | ε_sat = 0.82, plume = 0.35 |
+
+- **Fan:** no refrigeration term. Benefit is higher local air speed in SET; motor heat is added to the air.
+- **Evaporative:** adiabatic pad approaching the wet bulb; outdoor intake by default; bleed water 15%.
+- Schedule: service hours 06:00–22:00 for all three devices in this slice.
+
+Check what these assumptions produce with `venuecool calibrate examples/bus_stop.yaml` (same presets).
+
+## Comfort
+
+- Index: SET (`pythermalcomfort`), target 30 °C (see `examples/common/physics_materials.yaml`).
+- Decision basis: `extended` (hot-dry peaks exceed the strict ASHRAE 55 40 °C input limit).
+- This is a **comfort comparison**, not a heat-safety guarantee and not a satisfaction percentage.
+
+## What this slice deliberately omits
+
+- Multi-zone coupling (no curb, no connections)
+- Search / optimization / uncertainty
+- CFD or measured airflow tables (the `airflow.provider: table` interface exists but is unused here)
+
+## Verification vs validation
+
+`pytest` and the single-zone tests check units, wet-bulb limits, fan behaviour and baseline energy
+bookkeeping against the **stated model**. They are not validation against field measurements.
+
+
+===== FILE: docs/MODEL.md =====
+# VenueCool model: equations, assumptions and limitations
+
+This document states what the engine in `venuecool/` computes. Every equation below maps to a
+specific function; file references are given in brackets.
+
+## 1. Units and states
+
+Internal units are SI. Temperatures are °C (differences in K), pressure in Pa, mass in kg,
+power in **W**, and energy in **J**. Energies are converted to **kWh** only in reports
+(`J_PER_KWH = 3.6e6`). The code keeps power (kW installed) and energy (kWh used) separate:
+`installed_kW` and `electricity_kWh` are different fields.
+
+Humidity is carried as the **humidity ratio** W [kg water / kg dry air]. Relative humidity (RH)
+is only ever derived from it. Configuration quantities are `{value, unit, source, bounds}`. The
+schema declares a canonical unit for each field. A small whitelist of conversions is accepted
+(kW→W, m³/h→m³/s, %→fraction, mm→m, K→°C, …), and any other unit is rejected
+(`quantity.py`).
+
+State vector (`model.py`):
+
+| state | meaning |
+|---|---|
+| `h_i` | moist-air enthalpy of section *i* [J/kg_da] |
+| `W_i` | humidity ratio of section *i* |
+| `T_n` | temperature of surface node *n* |
+| accumulators | boundary energy, boundary water, gross flux magnitudes, total device evaporation, per-section enthalpy-flow breakdown |
+
+The accumulators are integrated but never feed back into the physics. The state size is
+independent of how many devices a scenario has, so an idle device cannot perturb the solver's
+step selection; the `test_baseline_equivalence` test checks this.
+
+## 2. Psychrometrics (`psychro.py`)
+
+* Saturation pressure: Hyland–Wexler (ASHRAE Fundamentals 2017, Ch. 1, eqs. 5–6).
+* Enthalpy: \(h = c_{p,a} T + W (h_{fg,0} + c_{p,v} T)\), with \(c_{p,a}=1006\),
+  \(c_{p,v}=1860\) J/(kg K), \(h_{fg,0}=2.501\times10^6\) J/kg. The datum is dry air and liquid
+  water at 0 °C. Temperature is the exact inverse: \(T = (h - h_{fg,0}W)/(c_{p,a}+c_{p,v}W)\).
+* Wet bulb: the adiabatic-saturation temperature \(t^*\) solving
+  \(h(t^*, W_s(t^*)) = h_{in} + (W_s(t^*) - W)\,c_w t^*\), using the *same* constants. A pad at
+  100% effectiveness therefore lands exactly on saturation.
+* Nothing is clipped. `state_validity` flags negative humidity, supersaturation (RH > 1),
+  out-of-range or non-finite temperatures. Flagged section-intervals are excluded from comfort
+  assessment as `unassessed_invalid_state` and counted.
+
+## 3. Air balances
+
+Dry-air mass \(M_i = \rho_{da} V_{eff,i}\) is fixed at the run-start density. This is an
+approximation: thermal expansion is not tracked. Every exchange is balanced in dry-air mass.
+
+\[
+M_i \frac{dh_i}{dt} = \sum_{src} \dot m_{src}(h_{src}-h_i) + Q_{conv,i} + Q_{occ,i},\qquad
+M_i \frac{dW_i}{dt} = \sum_{src} \dot m_{src}(W_{src}-W_i) + G_{occ,i}
+\]
+
+The sources are:
+
+* **Outdoor exchange** (open sections always exchange):
+  \(\dot m_{o,i} = \rho\,(Q_{min} + C_w A_{open} U_{10})\), two-way and balanced.
+* **Inter-section exchange**: \(\dot m_{ij} = \rho(Q_{min} + C_w A U_{10})\). The term enters
+  section *i* as \(\dot m (h_j-h_i)\) and section *j* as \(\dot m (h_i - h_j)\), so it is exactly
+  equal and opposite.
+* **Devices** (Section 6): \(f_k \dot m_d (h_{out,d} - h_k)\) for each served section *k*.
+
+Airflows come from an `AirflowProvider` (`airflow.py`). The default is the parametric form
+above. `TableAirflow` reads flows versus wind speed from measurements or CFD, so it can replace
+the parametric model without code changes elsewhere.
+
+## 4. Surfaces and radiation
+
+Each surface is a 1- or 2-node RC element. For 2 nodes, each node holds half of
+\(C=\rho c A L\), and the conductance between them is \(kA/L\). Node 0 is the face toward the
+section.
+
+* **Roof (exterior face)**: absorbs \(\alpha A\,\mathrm{GHI}\). It exchanges longwave with the
+  sky (fraction `exterior_sky_fraction`) and surroundings at outdoor air temperature, and
+  convects with \(h = a + bU_{10}\).
+* **Wall (exterior face)**: absorbs
+  \(\alpha A(\mathrm{DNI}\cos\theta + 0.5\,\mathrm{DHI} + 0.5\cdot0.2\,\mathrm{GHI})\) and has
+  sky/surroundings longwave and convection.
+* **Floor (interior face)**: absorbs
+  \(\alpha A(f_{sun}\,\mathrm{DNI}\sin\beta + F_{f,sky}\,\mathrm{DHI})\). Its bottom node
+  conducts to a deep-ground temperature through `ground_conductance`.
+* **Interior faces**: convection to section air with \(h = a + b\,v_{local}\). Grey longwave
+  exchange runs floor↔roof and floor↔walls,
+  \(q=\sigma\varepsilon_i\varepsilon_j A_f F_{f\to j}(T_f^4-T_j^4)\). Reciprocity sets
+  \(F_{j\to f} = A_f F_{f\to j}/A_j\), and a view factor above 1 is rejected. Each face's
+  remaining view goes to sky and/or surroundings.
+* **Sky temperature**: Berdahl–Martin clear-sky emissivity from the dew point. Clouds are not
+  modelled.
+* **Sun exposure** \(f_{sun}(t)\): `constant`, `schedule` (hour→fraction), or `canopy`, where
+  \(f = f_{open}\min(1, H\cot\beta/D)\), times a `shade_multiplier` that passive shade options
+  change. Materially different sun exposure should become a separate section.
+
+## 5. Occupants
+
+Total metabolic heat per person is \(Q_{tot} = M\cdot 58.15\cdot A_{body}\), with external work
+taken as 0. A sensible fraction \(f_s(T_{air})\), from a labelled table in the config, splits it.
+The moisture gain is \(G = Q_{tot}(1-f_s)/h_g(T_{air})\), and the air receives
+\(Q_{tot}f_s + G\,h_g = Q_{tot}\) exactly, so **the same metabolic energy is never counted
+twice**.
+
+Crowding effects represented:
+
+* heat and moisture gains scale with the number of people present;
+* exposure groups divide people by device coverage.
+
+Approximations (not represented):
+
+* body shading of floor and neighbours, and person-to-person radiation;
+* blockage of air jets by crowds;
+* radiative/convective split of body heat (all sensible heat goes to air);
+* solar energy absorbed by people, which affects comfort only and is not added to the air.
+
+## 6. Devices (`devices.py`)
+
+Every device is an air handler. It moves \(\dot m_d = \rho_o\,\dot V_d\) from an intake
+(outdoor air, or the \(f_k\)-weighted mixture of its served sections when recirculating),
+through a process, to outlet state \((h_{out}, W_{out})\). It delivers \(f_k\dot m_d\) to
+section *k*, with \(\sum f_k = 1\) enforced at validation.
+
+* **Fan**: no process. \(h_{out} = h_{in} + \eta P/\dot m\), where all electric power becomes
+  heat in the air. There is no refrigeration term. A fan's benefit comes only from local air
+  speed in the exposure groups it covers. A recirculating fan in one section adds no outdoor
+  exchange; `test_fan_raises_air_speed_not_outdoor_exchange` checks this.
+* **Direct evaporative cooler**: \(T_{pad}=T_{in}-\varepsilon(T_{in}-T_{wb})\), with \(W_{pad}\)
+  from the pad energy balance \(h_{pad}=h_{in}+(W_{pad}-W_{in})c_wT_{wb}\). Make-up water is
+  assumed at the wet bulb, a labelled assumption. Since \(\varepsilon\le1\), the outlet stays at
+  or above the wet bulb and \(W_{pad}\le W_s\). Motor heat is added afterwards. Water use is
+  \(\dot m(W_{out}-W_{in})(1+\text{bleed})\).
+* **Outdoor intake vs recirculation**: outdoor intake creates a through-flow, with outdoor air
+  in and displaced room air out. Recirculation only redistributes and humidifies the room air.
+* **One ledger per physical device**: electricity \(=P\times\)on-time. It is counted once even
+  when the device serves several sections. Total evaporation is integrated in the ODE; the
+  per-device split uses midpoint quadrature reconciled to that total, and the ratio is reported.
+
+### Local exposure (coverage) model
+
+For a covered group, local air is
+\(h_{loc}=h_{sec}+\sum_d w_d(h_{out,d}-h_{sec})\), and likewise for \(W\). Here
+\(\sum_d w_d = 1-\prod_d(1-\beta_d)\), split in proportion to the plume fractions \(\beta_d\).
+The weight is therefore bounded by 1 and overlapping devices are not double counted. Local
+speed is \(v=\sqrt{v_{base}^2+\sum_d v_d^2}\) with \(v_{base}=\max(v_{still}, k_{loc}U_{10})\).
+Coverage changes only the comfort inputs, not the section balance, so it is never applied
+twice. A group is counted as *served* once, however many devices cover it.
+
+### Supplied presets and claims
+
+The electrical draws are supplied: 0.25, 1.2, and 2.5 kW. The quoted effects ("feels up to
+3 °C cooler", "lowers air temperature up to 5 / 8 °C") are **not inputs**. `venuecool calibrate`
+reports what the assumed airflow, effectiveness, coverage speed, and plume fraction produce:
+
+* at four reference climates (`preset_reference_checks.csv`);
+* inside the simulated bus stop (`simulated_claim_checks.csv`).
+
+In the hot/dry bus-stop demonstration, the shelter-mean air-temperature drop is ≈4.6 K for
+cooler B (claim ≤5 °C) and ≈7.9 K for cooler C (claim ≤8 °C).
+
+The fan's SET reduction against still air is 2.5–3.2 K in the dry references and 3.7 K at
+33 °C and 60% RH. The humid case exceeds the "up to 3 °C" wording, and the code reports this
+rather than hiding it. Inside the simulated shelter the reduction is only 0.3–0.9 K. The
+synthetic wind already gives ≈1 m/s locally, and extra speed has diminishing SET benefit.
+The fan's motor heat slightly warms the section air.
+
+In warm/humid air the evaporative drops are much smaller, as expected from the wet-bulb limit.
+
+## 7. Mean radiant temperature and comfort (`comfort.py`)
+
+* Longwave: \(T_{lw}^4=\sum_k F_k T_k^4\) over floor, roof underside, walls, sky, and
+  surroundings, using the occupant view factors from the config.
+* Solar: the ASHRAE 55-2023 Appendix C (SolarCal) structure.
+  * The direct-beam ΔMRT comes from `pythermalcomfort.models.solar_gain` with `f_svv=0`,
+    `f_bes=1`, averaged over body orientations (SHARP 0–180°), and scaled linearly with DNI
+    (the term is linear in DNI).
+  * Diffuse and floor-reflected:
+    \(\Delta T = 0.5 f_{eff} f_{svv}(\mathrm{DHI}+I_{floor}R_{floor})(\alpha_{sw}/\alpha_{lw})/(f_{eff}h_r)\),
+    with \(I_{floor}\) and \(R_{floor}=1-\alpha_{floor}\) taken from the floor model.
+* **Consistent sunlight**: each group is split into *sunlit* people (share \(f_{sun}\), direct
+  beam on the body) and *shaded* people (share \(1-f_{sun}\)). \(f_{sun}\) is the same value that
+  heats the floor.
+* **Prescribed radiant mode**: `radiation.mode: prescribed` sets
+  \(T_{lw}=T_{air}+\Delta\), with solar added optionally.
+* **Equivalent temperature**: SET (`pythermalcomfort.models.set_tmp`, Gagge two-node model),
+  using local air temperature, RH, local speed, MRT, met, clo, and pressure.
+* **Applicability**: each population-interval is classed as
+  * `supported`: finite with `limit_inputs=True` (ASHRAE 55 ranges: 10–40 °C, v < 2 m/s, …);
+  * `extrapolated`: outside those ranges but inside a declared `extended_limits` envelope,
+    computed with `limit_inputs=False` and flagged;
+  * `unassessed`: anything else, or an invalid air state.
+
+  `comfort.decision_basis` chooses whether `extrapolated` counts as assessed. The examples use
+  `extended` because hot-dry peaks exceed 40 °C. Extrapolated person-hours are always reported.
+
+## 8. Metrics (`metrics.py`)
+
+For every population-interval, discomfort is \(D=\max(ET-target,0)\) and burden is
+\(B = D\times\text{people}\times\Delta t\) [K·person-h]. Interval values use the midpoint of
+conserved states (h, W averaged), and people are the exact integral of the step occupancy
+schedule.
+
+* **Person-hours** \(=\int N\,dt\). These are not visitors and are never multiplied by dwell time.
+* **Relief** = baseline burden − intervention burden, summed only over section-intervals
+  assessed in *both* runs (matched). Negative values are kept, and worsened sections are listed.
+* **Attainment** = person-hours with ET ≤ target ÷ assessed person-hours.
+* **Poorly served**: sections with attainment below `poorly_served_attainment`.
+* **Ratios** (relief/kWh, relief/USD) are formed after summing across the venue.
+* **Costs over the horizon**: operating electricity (with time-of-use) and water scale by
+  `season_days / simulated_days`. Capital uses a CRF annuity, charged once per season, plus
+  annual maintenance. Passive options are costed the same way.
+
+## 9. Numerics
+
+* SciPy `solve_ivp` (BDF by default; Radau, LSODA, and RK45 are selectable) with a Jacobian
+  sparsity pattern.
+* Integration restarts at every schedule discontinuity: weather and occupancy rows, schedule
+  edges, time-of-use edges, hourly breakpoints. Devices and occupancy are constant within a
+  segment.
+* Warm-up: `warmup_days` cycles the first 24 h of the window, so thermal storage starts near
+  its periodic state.
+* Residuals reported per run:
+  * global energy and water residuals relative to gross flux;
+  * `internal_cancellation_rel_max`, an algebraic check that internal terms cancel at sampled
+    states;
+  * dry-air imbalance;
+  * invalid-state counts;
+  * the evaporation reconciliation ratio.
+
+  Because BDF preserves linear invariants, the integrated residuals mainly confirm the
+  equal-and-opposite bookkeeping. Discretisation error is tested separately by refinement
+  (`venuecool refine`, `test_numerical_refinement`).
+
+## 10. Search and uncertainty
+
+* **Search** (`search.py`): enumerates slot options (none / preset / preset×N) × schedule ×
+  passive subsets. It prunes by device count and investment before simulating, and classifies
+  each candidate as `meets_target`, `physical_shortfall`, `unsupported_evaluation`, or
+  `constraint_violation`.
+  * The lowest-energy (or lowest-cost) feasible candidate is **re-simulated independently** at
+    rtol 1e-8 with a 150 s step.
+  * Results stream to CSV as candidates finish.
+  * If nothing meets the target, the run says so and lists the closest physical shortfalls.
+* **Uncertainty** (`uncertainty.py`): seeded Latin hypercube sampling over every bounded
+  quantity. The baseline and every intervention share each draw (common random numbers). It
+  reports quantiles, P(relief < 0), and Spearman rank sensitivities. `sweep` gives one-at-a-time
+  low/high tornado data.
+
+## 11. Software/physics checks vs validation
+
+The test suite (`tests/`) checks units, configuration, conservative mixing, fan behaviour,
+evaporative thermodynamics, shared-device accounting, baseline equivalence, occupancy
+aggregation, negative-benefit preservation, matched draws, search reporting, and numerical
+refinement. These are **verification** checks. **No validation against measurements has been
+done**: all example inputs are synthetic.
+
+To validate, you would need:
+
+* measured section air temperature and humidity (shaded, aspirated sensors) at several points;
+* globe or MRT measurements, sunlit and shaded;
+* air speeds in covered zones;
+* tracer-gas exchange rates (which can replace the parametric airflows through `TableAirflow`);
+* device airflow, power, and water metering;
+* occupancy counts.
+
+## 12. Limitations and extension points
+
+* Each section is well mixed. There is no stratification and no resolved jets; the plume
+  fraction and covered speed stand in for them. CFD or measurements can supply these per device
+  and group without code changes (`plume_fraction`, `covered_air_speed`, `TableAirflow`).
+* Wind direction, stack-driven exchange, and train- or vehicle-induced flows are all folded into
+  \(Q_{min}+C_wAU\).
+* Clear-sky longwave, no cloud model, and no shortwave transmission through translucent roofs.
+* SET is a steady-state index for an average adult. It does not represent dynamic
+  physiology, acclimatisation, age, or health status, and **is not a heat-safety guarantee**.
+  Later extensions (e.g. JOS-3 or two-node transient models) can plug in where `comfort._set`
+  is called.
+* Representative design day(s) scaled to a season. Running multi-day measured weather is
+  supported (`end_h` > 24) and avoids that scaling.
+* Automatic CAD ingestion is not implemented. Sections take simple 2D polygons, and the
+  `footprint` and `surfaces` fields are the interface for a future importer.
+
+
+===== FILE: docs/IMPROVEMENTS.md =====
+# Three fixes (integration, device overrides, robustness)
+
+These changes sit on top of the existing engine. The CLI, CSV exports, and the single-zone
+report command behave as before.
+
+## 1. Segment hand-off (`venuecool/model.py`)
+
+`solve_ivp` stores only the times in `t_eval`. The reporting grid is still that series, but a
+schedule edge (or any other segment boundary) is often not on the grid. The next segment used
+to start from the last *stored* sample, which is earlier than the true endpoint, so a slice of
+dynamics was dropped and the state jumped.
+
+`simulate()` now appends the segment end to the solver's evaluation times and copies that
+column into the initial state of the next segment. Points that are not on the reporting grid
+are not written into the output series.
+
+Regression: `test_offgrid_schedule_matches_fine_grid` runs an evaporative cooler that switches
+off at 0.35 h (1260 s) with a 600 s output step, and compares air temperature at later shared
+times with a 60 s reference.
+
+## 2. Device overrides (`venuecool/config.py`, `venuecool/model.py`)
+
+Overrides were plain `Quantity` objects. A value entered in kW kept the number 0.25 and was
+then used as if it were watts. `apply_device_overrides` merges the override into the preset and
+re-validates it, which:
+
+* converts units with the same whitelist as the rest of the schema (kW to W, m³/h to m³/s, …);
+* rejects unknown fields;
+* rejects non-physical values: airflow ≤ 0, effectiveness outside [0, 1], coverage
+  (`plume_fraction`) outside [0, 1], negative power or bleed, motor-heat fraction outside [0, 1].
+
+This runs both when the configuration is loaded and when devices are resolved for a run.
+Regression: `test_device_override_converts_kw_and_rejects_invalid`.
+
+## 3. Assumption sensitivity (`venuecool robust`)
+
+```bash
+.venv/bin/python -m venuecool robust examples/bus_shelter_single.yaml
+```
+
+Re-simulates the single-zone shelter at the documented low/high bounds for outdoor airflow,
+open-side solar fraction, and device coverage (plume fraction and covered air speed). For each
+trajectory it scores SET targets of 28 °C, 30 °C and 32 °C without a new integration.
+
+Outputs in `outputs/bus_shelter_single/hot_dry/robustness/`:
+
+| file | contents |
+|---|---|
+| `robustness_results.csv` | burden, relief, attainment, **supported** and **extrapolated** person-hours |
+| `robustness_summary.json` | which system is preferred in each cell |
+| `preferred_system.html` | case × target, labelled with the preferred system |
+| `relief_by_assumption.html` | relief of the three systems at 30 °C |
+| `supported_vs_extrapolated.html` | applicability split (does not depend on the target) |
+
+Preferred means the largest matched relief. Baseline is preferred when every intervention has
+relief ≤ 0. Supported person-hours are inside the strict ASHRAE 55 input limits;
+extrapolated person-hours are outside those limits but inside the declared extended envelope.
+The decision basis in the examples still *uses* extrapolated values for burden when
+`decision_basis` is `extended`; the two counts are reported separately either way.
+
+Inputs remain `SYNTHETIC_DEMONSTRATION`. This is a sensitivity of the stated model, not a
+field validation.
+
+On the hot/dry synthetic day the preferred system (largest relief) is the 2.5 kW cooler in
+every cell: airflow, solar, coverage, and all three SET targets. Relief itself moves a lot
+(about 40 to 248 K·person-h). Less outdoor air and more sun increase the cooler's benefit;
+more outdoor air and a tighter canopy reduce it. Supported and extrapolated person-hours
+trade off with those same assumptions (more sun shifts hours into the extrapolated class)
+and do not change when only the SET target changes.
+
+
+===== FILE: examples/bus_shelter_single.yaml =====
+# Single-zone open-sided bus shelter (HiMCM 2026 Problem B, smallest complete working slice).
+# SYNTHETIC DEMONSTRATION: geometry, airflow and occupancy are assumptions, not a survey.
+# Multi-zone coupling, search and uncertainty are intentionally omitted here.
+include: [common/physics_materials.yaml, common/devices.yaml, common/templates.yaml]
+
+meta:
+  name: "Single-zone open bus shelter"
+  description: "One open-sided 4 m x 1.8 m roofed shelter over a 24 h synthetic hot/dry day."
+  data_status: SYNTHETIC_DEMONSTRATION
+  notes:
+    - "Single section only: no curb, no inter-section exchange."
+    - "One exposure group covers the whole shelter (simplest coverage story for Problem B devices)."
+    - "Equipment airflow, coverage speed, effectiveness and outdoor exchange are DEMO-ASSUMPTIONS; see docs/ASSUMPTIONS_SINGLE_ZONE.md."
+
+site: {latitude_deg: 33.45, longitude_deg: -112.07, utc_offset_h: -7, day_of_year: 196}
+weather: {file: data/weather_hot_dry.csv}
+occupancy: {file: data/occupancy_bus_shelter_single.csv}
+simulation: {start_h: 0, end_h: 24, warmup_days: 2, output_step_s: 300}
+
+sections:
+  - id: shelter
+    name: "Shelter (roofed bench area)"
+    template: roofed_open_seating
+    footprint: [[0, 0], [4, 0], [4, 1.8], [0, 1.8]]
+    height_m: 2.6
+    surfaces:
+      - id: roof
+        material: polycarbonate
+        thickness: {value: 8, unit: "mm", source: "DEMO-ASSUMPTION: solid polycarbonate canopy"}
+        solar_absorptance_exterior: {value: 0.5, unit: "-", source: "DEMO-ASSUMPTION: tinted polycarbonate (absorbed share; transmission neglected)", bounds: [0.35, 0.65]}
+      - id: rear_panel
+        kind: wall
+        material: glass
+        thickness: {value: 10, unit: "mm", source: "DEMO-ASSUMPTION: toughened glass ad panel"}
+        nodes: 1
+        area_m2: 8.0
+        azimuth_deg: 0
+        emissivity: {value: 0.84, unit: "-", source: "glass"}
+        solar_absorptance_exterior: {value: 0.15, unit: "-", source: "clear glass absorbed fraction"}
+        exterior_sky_fraction: 0.5
+        interior_sky_fraction: 0.3
+    sun: {mode: canopy, canopy_height_m: 2.6, canopy_depth_m: 1.8,
+          open_side_fraction: {value: 0.5, unit: "-", source: "DEMO-ASSUMPTION: street side open to the south", bounds: [0.3, 0.7]}}
+    outdoor:
+      opening_area_m2: 14.0
+    radiation:
+      floor_view: {roof: 0.55, walls: 0.15, sky: 0.1}
+      occupant_view: {floor: 0.45, roof: 0.3, walls: 0.15, sky: 0.05}
+    exposure_groups:
+      - {id: all, occupant_share: 1.0}
+
+devices:
+  - {id: fan_A, preset: fan_system, serves: [{section: shelter, airflow_fraction: 1.0, groups: [all]}], schedule: service_hours}
+  - {id: evap_B, preset: evaporative_cooler, serves: [{section: shelter, airflow_fraction: 1.0, groups: [all]}], schedule: service_hours}
+  - {id: evap_C, preset: large_evaporative_cooler, serves: [{section: shelter, airflow_fraction: 1.0, groups: [all]}], schedule: service_hours}
+
+scenarios:
+  - {id: baseline, description: "No cooling equipment"}
+  - {id: A_fan, description: "0.25 kW fan system, service hours 06-22", devices: [fan_A]}
+  - {id: B_evap, description: "1.2 kW evaporative cooler, service hours 06-22", devices: [evap_B]}
+  - {id: C_large_evap, description: "2.5 kW large evaporative cooler, service hours 06-22", devices: [evap_C]}
+
+
+===== FILE: examples/common/devices.yaml =====
+# Cooling-device presets. Electrical draw is the SUPPLIED value from the problem statement.
+# The quoted effects ("feels up to 3 C cooler", "lowers air temperature up to 5 C / 8 C") are
+# conditional performance claims; they do not fix airflow or coverage. Airflow, coverage speed,
+# saturation effectiveness and plume fraction are DEMO-ASSUMPTIONS with bounds, checked against
+# the claims by `venuecool calibrate` (see docs/MODEL.md).
+
+device_presets:
+  fan_system:
+    kind: fan
+    label: "A. Fan system"
+    claim: "Makes space feel up to 3 C cooler (supplied claim, conditional)"
+    electric_power: {value: 0.25, unit: "kW", source: "SUPPLIED: problem statement table"}
+    airflow: {value: 2.5, unit: "m3/s", source: "DEMO-ASSUMPTION: two ~0.6 m pedestal/wall fans, ~4500 m3/h each", bounds: [1.5, 3.5]}
+    covered_air_speed: {value: 1.3, unit: "m/s", source: "DEMO-ASSUMPTION: mean occupant-level jet speed in covered zone; chosen so the SET reduction at the warm_moderate reference (32 C, 40% RH, still air 0.2 m/s) is ~3 K (`venuecool calibrate`)", bounds: [0.8, 1.8]}
+    plume_fraction: {value: 0.0, unit: "-", source: "fan delivers section air (no process); local air = section air"}
+    capital_cost: {value: 600, unit: "USD", source: "DEMO-ASSUMPTION: installed outdoor-rated fans"}
+    lifetime: {value: 8, unit: "year", source: "DEMO-ASSUMPTION"}
+    maintenance: {value: 40, unit: "USD/year", source: "DEMO-ASSUMPTION"}
+    default_intake: recirculate
+
+  evaporative_cooler:
+    kind: evaporative
+    label: "B. Evaporative cooler"
+    claim: "Lowers air temperature up to 5 C (supplied claim, conditional on dry air)"
+    electric_power: {value: 1.2, unit: "kW", source: "SUPPLIED: problem statement table"}
+    airflow: {value: 3.0, unit: "m3/s", source: "DEMO-ASSUMPTION: portable direct evaporative unit ~11000 m3/h", bounds: [2.0, 4.0]}
+    saturation_effectiveness: {value: 0.75, unit: "-", source: "DEMO-ASSUMPTION: 100 mm cellulose media at rated face velocity", bounds: [0.6, 0.85]}
+    covered_air_speed: {value: 1.0, unit: "m/s", source: "DEMO-ASSUMPTION: supply-jet speed at occupants in covered zone", bounds: [0.6, 1.5]}
+    plume_fraction: {value: 0.25, unit: "-", source: "DEMO-ASSUMPTION: share of supply air in the air breathed in the covered zone (replace with CFD/measurement)", bounds: [0.1, 0.45]}
+    bleed_fraction: {value: 0.15, unit: "-", source: "DEMO-ASSUMPTION: bleed-off water per unit evaporated", bounds: [0.05, 0.3]}
+    capital_cost: {value: 2500, unit: "USD", source: "DEMO-ASSUMPTION: installed with water connection"}
+    lifetime: {value: 7, unit: "year", source: "DEMO-ASSUMPTION"}
+    maintenance: {value: 250, unit: "USD/year", source: "DEMO-ASSUMPTION: pads + cleaning"}
+    default_intake: outdoor
+
+  large_evaporative_cooler:
+    kind: evaporative
+    label: "C. Large evaporative cooler"
+    claim: "Lowers air temperature up to 8 C (supplied claim, conditional on dry air)"
+    electric_power: {value: 2.5, unit: "kW", source: "SUPPLIED: problem statement table"}
+    airflow: {value: 6.0, unit: "m3/s", source: "DEMO-ASSUMPTION: large ducted/portable unit ~22000 m3/h", bounds: [4.5, 8.0]}
+    saturation_effectiveness: {value: 0.82, unit: "-", source: "DEMO-ASSUMPTION: 150-200 mm rigid media", bounds: [0.7, 0.9]}
+    covered_air_speed: {value: 1.3, unit: "m/s", source: "DEMO-ASSUMPTION", bounds: [0.8, 1.8]}
+    plume_fraction: {value: 0.35, unit: "-", source: "DEMO-ASSUMPTION: larger jet, larger share of supply air in the covered zone", bounds: [0.15, 0.55]}
+    bleed_fraction: {value: 0.15, unit: "-", source: "DEMO-ASSUMPTION", bounds: [0.05, 0.3]}
+    capital_cost: {value: 5000, unit: "USD", source: "DEMO-ASSUMPTION"}
+    lifetime: {value: 8, unit: "year", source: "DEMO-ASSUMPTION"}
+    maintenance: {value: 400, unit: "USD/year", source: "DEMO-ASSUMPTION"}
+    default_intake: outdoor
+
+schedules:
+  always: {mode: always}
+  service_hours: {mode: hours, intervals: [[6, 22]]}
+  peak_afternoon: {mode: hours, intervals: [[11, 19]]}
+  occupied_hot: {mode: occupied_hot, outdoor_threshold: {value: 30, unit: "degC", source: "DEMO-ASSUMPTION: run when people present and outdoor air >= 30 C"}}
+  occupied_very_hot: {mode: occupied_hot, outdoor_threshold: {value: 33, unit: "degC", source: "DEMO-ASSUMPTION: run when people present and outdoor air >= 33 C"}}
+
+
+===== FILE: examples/common/physics_materials.yaml =====
+# Shared physics constants, materials and comfort settings for the VenueCool examples.
+# Every influential value carries a unit, a provenance string and (where uncertain) bounds.
+# "DEMO-ASSUMPTION" marks values chosen for demonstration in the absence of site data.
+
+physics:
+  convection_a: {value: 5.7, unit: "W/(m2*K)", source: "McAdams-type flat-plate correlation h = a + b*v (ASHRAE Fundamentals Ch.4 style); simplified", bounds: [4.0, 7.5]}
+  convection_b: {value: 3.8, unit: "W*s/(m3*K)", source: "McAdams-type flat-plate correlation h = a + b*v; simplified", bounds: [2.5, 4.5]}
+  still_air_speed: {value: 0.1, unit: "m/s", source: "minimum occupant-level air speed (natural convection floor), ASHRAE 55 'still air'"}
+  body_surface_area: {value: 1.8, unit: "m2", source: "DuBois area of a reference adult (ASHRAE 55)"}
+  occupant_sensible_fraction: [[20, 0.72], [24, 0.62], [26, 0.55], [28, 0.48], [30, 0.40], [32, 0.30], [34, 0.20], [36, 0.10], [40, 0.05]]
+  occupant_sensible_fraction_source: >-
+    DEMO-ASSUMPTION following the trend of ASHRAE Fundamentals Ch.18 sensible/latent split for
+    lightly active adults (latent share rises with air temperature); the total heat added to air
+    is always the metabolic rate so energy is counted once.
+
+comfort:
+  index: SET
+  target: {value: 30.0, unit: "degC", source: "DEMO-ASSUMPTION: SET 30 C ~ boundary between 'slightly warm' and 'warm' (Gagge et al. 1986); configurable"}
+  decision_basis: extended
+  poorly_served_attainment: 0.8
+  solar_absorptance_body: {value: 0.7, unit: "-", source: "ASHRAE 55-2023 Appendix C default short-wave absorptivity (medium skin/clothing)", bounds: [0.6, 0.8]}
+
+materials:
+  concrete:
+    conductivity: {value: 1.4, unit: "W/(m*K)", source: "ASHRAE Fundamentals Ch.33 typical normal-weight concrete"}
+    density: {value: 2300, unit: "kg/m3", source: "ASHRAE Fundamentals Ch.33"}
+    specific_heat: {value: 880, unit: "J/(kg*K)", source: "ASHRAE Fundamentals Ch.33"}
+  asphalt:
+    conductivity: {value: 0.75, unit: "W/(m*K)", source: "typical asphalt pavement literature value"}
+    density: {value: 2300, unit: "kg/m3", source: "typical asphalt pavement"}
+    specific_heat: {value: 920, unit: "J/(kg*K)", source: "typical asphalt pavement"}
+  steel_sheet:
+    conductivity: {value: 45, unit: "W/(m*K)", source: "carbon steel handbook value"}
+    density: {value: 7850, unit: "kg/m3", source: "carbon steel"}
+    specific_heat: {value: 500, unit: "J/(kg*K)", source: "carbon steel"}
+  polycarbonate:
+    conductivity: {value: 0.2, unit: "W/(m*K)", source: "manufacturer-typical solid polycarbonate"}
+    density: {value: 1200, unit: "kg/m3", source: "solid polycarbonate"}
+    specific_heat: {value: 1200, unit: "J/(kg*K)", source: "solid polycarbonate"}
+  glass:
+    conductivity: {value: 1.0, unit: "W/(m*K)", source: "soda-lime glass"}
+    density: {value: 2500, unit: "kg/m3", source: "soda-lime glass"}
+    specific_heat: {value: 840, unit: "J/(kg*K)", source: "soda-lime glass"}
+  brick:
+    conductivity: {value: 0.7, unit: "W/(m*K)", source: "ASHRAE Fundamentals Ch.33 common brick"}
+    density: {value: 1800, unit: "kg/m3", source: "common brick"}
+    specific_heat: {value: 840, unit: "J/(kg*K)", source: "common brick"}
+  fabric_membrane:
+    conductivity: {value: 0.2, unit: "W/(m*K)", source: "PTFE/PVC tensile membrane typical"}
+    density: {value: 1400, unit: "kg/m3", source: "PTFE/PVC tensile membrane typical"}
+    specific_heat: {value: 1000, unit: "J/(kg*K)", source: "PTFE/PVC tensile membrane typical"}
+
+tariffs:
+  electricity: {value: 0.15, unit: "USD/kWh", source: "DEMO-ASSUMPTION: commercial off-peak tariff", bounds: [0.10, 0.25]}
+  time_of_use:
+    - {start_h: 14, end_h: 19, price: {value: 0.25, unit: "USD/kWh", source: "DEMO-ASSUMPTION: summer on-peak"}}
+  water: {value: 2.5, unit: "USD/m3", source: "DEMO-ASSUMPTION: combined water + sewer charge", bounds: [1.5, 5.0]}
+  discount_rate: {value: 0.05, unit: "1/year", source: "DEMO-ASSUMPTION: public-sector real discount rate"}
+  season_days: {value: 120, unit: "day", source: "DEMO-ASSUMPTION: each simulated design day stands for one of 120 hot-season days"}
+
+
+===== FILE: pyproject.toml =====
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "venuecool"
+version = "0.1.0"
+description = "Section-resolved transient cooling assessment for open-air and semi-open venues"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "pandas>=2.1",
+  "pyyaml>=6",
+  "pydantic>=2.5",
+  "pythermalcomfort>=4.8",
+  "plotly>=5.18",
+]
+
+[project.optional-dependencies]
+dashboard = ["streamlit>=1.30"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+venuecool = "venuecool.cli:main"
+
+[tool.setuptools]
+packages = ["venuecool"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::UserWarning"]

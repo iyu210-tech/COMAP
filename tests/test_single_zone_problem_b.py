@@ -83,6 +83,22 @@ def test_large_cooler_uses_more_energy_and_gives_more_relief(runs):
     assert cc["relief_Kph"] > cb["relief_Kph"]
 
 
+def test_set_target_changes_burden_not_applicability(runs):
+    from venuecool import metrics
+    base = runs["baseline"]
+    low = metrics.summarize(base.comfort_df, base.cfg, target=28.0)
+    high = metrics.summarize(base.comfort_df, base.cfg, target=32.0)
+    assert low["venue"]["burden_Kph"] > high["venue"]["burden_Kph"]
+    assert low["venue"]["supported_person_hours"] == pytest.approx(high["venue"]["supported_person_hours"])
+    assert low["venue"]["extrapolated_person_hours"] == pytest.approx(high["venue"]["extrapolated_person_hours"])
+
+
+def test_preferred_system_rule():
+    from venuecool.robustness import preferred_scenario
+    assert preferred_scenario({"A_fan": 10.0, "B_evap": 40.0, "C_large_evap": 30.0}) == "B_evap"
+    assert preferred_scenario({"A_fan": -1.0, "B_evap": 0.0}) == "baseline"
+
+
 def test_timeseries_includes_cumulative_kwh(runs):
     df = timeseries_frame(runs["A_fan"])
     assert "electricity_kWh_cum" in df.columns

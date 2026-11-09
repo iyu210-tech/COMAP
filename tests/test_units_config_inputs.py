@@ -102,6 +102,33 @@ def test_uncertain_passive_option_values_are_drawable():
     assert not unused_by(study, "A_fan", "sections[shelter].occupancy.clo.value")
 
 
+def test_device_override_converts_kw_and_rejects_invalid(mini_raw):
+    from venuecool.model import resolve_devices
+    from conftest import study_with
+    r = copy.deepcopy(mini_raw)
+    fan = next(d for d in r["devices"] if d["id"] == "fan_hour")
+    fan["overrides"] = {"electric_power": q(0.5, "kW", "test override")}
+    cfg = VenueConfig.model_validate(r)
+    assert resolve_devices(cfg, ["fan_hour"])[0].power_W == pytest.approx(500.0)
+
+    def mut(raw):
+        next(d for d in raw["devices"] if d["id"] == "fan_hour")["overrides"] = {
+            "electric_power": q(0.5, "kW", "test override")}
+    led = study_with(mini_raw, mut).run(["fan_hour"], label="half").sim.ledgers[0]
+    assert led["electric_power_kW"] == pytest.approx(0.5)
+    assert led["electricity_kWh"] == pytest.approx(0.5 * led["on_hours"])
+
+    def bad(field, quantity, match):
+        raw = copy.deepcopy(mini_raw)
+        next(d for d in raw["devices"] if d["id"] == "evap_out")["overrides"] = {field: quantity}
+        with pytest.raises((ValidationError, ValueError), match=match):
+            VenueConfig.model_validate(raw)
+    bad("saturation_effectiveness", q(1.5, "-", "above 1"), "saturation_effectiveness")
+    bad("airflow", q(-1.0, "m3/s", "negative"), "airflow")
+    bad("plume_fraction", q(1.2, "-", "above 1"), "plume_fraction")
+    bad("no_such_field", q(1.0, "-", "typo"), "unknown preset field")
+
+
 def test_weather_missing_columns_and_nans_raise(tmp_path, mini_study):
     site = mini_study.cfg0.site
     p = tmp_path / "w.csv"

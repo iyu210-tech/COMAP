@@ -1,0 +1,117 @@
+{
+  "definition": "preferred = intervention with the largest matched relief; baseline if all relief <= 0",
+  "targets_C": [
+    28.0,
+    30.0,
+    32.0
+  ],
+  "preferred_changes": false,
+  "winners": [
+    {
+      "case": "airflow_high",
+      "target_C": 28.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "airflow_high",
+      "target_C": 30.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "airflow_high",
+      "target_C": 32.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "airflow_low",
+      "target_C": 28.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "airflow_low",
+      "target_C": 30.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "airflow_low",
+      "target_C": 32.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "coverage_high",
+      "target_C": 28.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "coverage_high",
+      "target_C": 30.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "coverage_high",
+      "target_C": 32.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "coverage_low",
+      "target_C": 28.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "coverage_low",
+      "target_C": 30.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "coverage_low",
+      "target_C": 32.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "nominal",
+      "target_C": 28.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "nominal",
+      "target_C": 30.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "nominal",
+      "target_C": 32.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "solar_high",
+      "target_C": 28.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "solar_high",
+      "target_C": 30.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "solar_high",
+      "target_C": 32.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "solar_low",
+      "target_C": 28.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "solar_low",
+      "target_C": 30.0,
+      "preferred_scenario": "C_large_evap"
+    },
+    {
+      "case": "solar_low",
+      "target_C": 32.0,
+      "preferred_scenario": "C_large_evap"
+    }
+  ],
+  "note": "supported_person_hours and extrapolated_person_hours do not depend on the SET target. They count comfort evaluations inside strict ASHRAE 55 input limits vs the declared extended envelope. Weather and occupancy remain SYNTHETIC_DEMONSTRATION."
+}

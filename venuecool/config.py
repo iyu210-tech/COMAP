@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from .quantity import Q, Quantity
 
@@ -298,7 +298,19 @@ class DevicePreset(_M):
     default_intake: Literal["outdoor", "recirculate"] = "recirculate"
 
     @model_validator(mode="after")
-    def _evap(self):
+    def _physical(self):
+        if self.electric_power.value < 0:
+            raise ValueError("electric_power must be >= 0")
+        if self.airflow.value <= 0:
+            raise ValueError("airflow must be > 0")
+        if self.covered_air_speed.value < 0:
+            raise ValueError("covered_air_speed must be >= 0")
+        if not 0.0 <= self.plume_fraction.value <= 1.0:
+            raise ValueError("plume_fraction (coverage fraction) must lie in [0, 1]")
+        if self.bleed_fraction.value < 0:
+            raise ValueError("bleed_fraction must be >= 0")
+        if not 0.0 <= self.motor_heat_to_air.value <= 1.0:
+            raise ValueError("motor_heat_to_air must lie in [0, 1]")
         if self.kind == "evaporative" and self.saturation_effectiveness is None:
             raise ValueError("evaporative presets need saturation_effectiveness")
         if self.saturation_effectiveness is not None and not 0 <= self.saturation_effectiveness.value <= 1:
@@ -340,6 +352,25 @@ class Device(_M):
         if len({s.section for s in self.serves}) != len(self.serves):
             raise ValueError(f"device {self.id}: a section is listed twice in 'serves'")
         return self
+
+
+def apply_device_overrides(preset: DevicePreset, overrides: Dict[str, Quantity], where: str) -> DevicePreset:
+    """Merge overrides into a preset, convert each quantity to its canonical unit, and re-validate.
+
+    Overrides are stored as plain Quantities (so a kW value is not converted at parse time).
+    Re-validating the merged preset runs the ``Q(...)`` converters and the physical bounds.
+    """
+    if not overrides:
+        return preset
+    data = preset.model_dump()
+    for k, q in overrides.items():
+        if k not in DevicePreset.model_fields:
+            raise ValueError(f"{where}: override of unknown preset field {k}")
+        data[k] = q.model_dump() if isinstance(q, Quantity) else q
+    try:
+        return DevicePreset.model_validate(data)
+    except ValidationError as e:
+        raise ValueError(f"{where}: invalid override: {e}") from e
 
 
 class PassiveOption(_M):
@@ -443,9 +474,7 @@ class VenueConfig(_M):
             if d.schedule not in self.schedules:
                 raise ValueError(f"device {d.id}: unknown schedule {d.schedule}")
             _check_serves(d.serves, sec, f"device {d.id}")
-            for k in d.overrides:
-                if k not in DevicePreset.model_fields:
-                    raise ValueError(f"device {d.id}: override of unknown preset field {k}")
+            apply_device_overrides(self.device_presets[d.preset], d.overrides, f"device {d.id}")
         pids = {p.id for p in self.passive_options}
         for sc in self.scenarios:
             for d in sc.devices:

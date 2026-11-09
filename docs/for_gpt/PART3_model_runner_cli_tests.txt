@@ -1,0 +1,2870 @@
+# PART3_model_runner_cli_tests.txt
+# Plain-text pack. Each section starts with ===== FILE: path =====
+
+
+===== FILE: venuecool/config.py =====
+"""Validated venue configuration (YAML/JSON) with section templates and provenance.
+
+Pipeline: ``load_raw`` -> ``expand_templates`` -> (optional uncertainty draw / passive overrides via
+``set_path``) -> ``validate``. Each section keeps its own identity after template expansion: the
+template is deep-copied and merged with the section's own entries.
+
+Override paths use dots with ``[id]`` selectors for lists of objects, e.g.
+``sections[shelter].surfaces[roof].solar_absorptance_exterior.value``.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import re
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+
+from .quantity import Q, Quantity
+
+
+class _M(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+# --------------------------------------------------------------------------- building blocks
+class Meta(_M):
+    name: str
+    description: str = ""
+    data_status: str = Field(
+        description="e.g. SYNTHETIC_DEMONSTRATION or MEASURED; reported in every output")
+    notes: List[str] = []
+
+
+class Site(_M):
+    latitude_deg: float = Field(ge=-90, le=90)
+    longitude_deg: float = Field(ge=-180, le=180)
+    utc_offset_h: float
+    day_of_year: int = Field(ge=1, le=366)
+
+
+class FileRef(_M):
+    file: str
+    solar_split: Literal["provided", "erbs"] = "provided"
+
+
+class AirflowSpec(_M):
+    """Air-exchange provider. ``table``: CSV of flows vs wind speed (``wind_ms``, ``out:<section>``,
+    ``conn:<connection>`` in m3/s) from tracer-gas measurements or CFD."""
+    provider: Literal["parametric", "table"] = "parametric"
+    file: Optional[str] = None
+    source: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.provider == "table" and not (self.file and self.source and self.source.strip()):
+            raise ValueError("airflow provider 'table' needs a file and a source")
+        return self
+
+
+class Simulation(_M):
+    start_h: float = 0.0
+    end_h: float = 24.0
+    warmup_days: int = Field(default=2, ge=0)
+    output_step_s: float = Field(default=300.0, gt=0)
+    method: Literal["BDF", "Radau", "LSODA", "RK45"] = "BDF"
+    rtol: float = 1e-6
+    atol_scale: float = 1e-6
+    max_step_s: float = 900.0
+
+
+class Physics(_M):
+    convection_a: Q("W/(m2*K)")
+    convection_b: Q("W*s/(m3*K)")
+    still_air_speed: Q("m/s")
+    body_surface_area: Q("m2")
+    occupant_sensible_fraction: List[Tuple[float, float]] = Field(
+        description="[[air_temp_degC, sensible fraction of total metabolic heat], ...]")
+    occupant_sensible_fraction_source: str
+    sky_model: Literal["berdahl_martin"] = "berdahl_martin"
+
+
+class ExtendedLimits(_M):
+    tdb: Tuple[float, float] = (5.0, 50.0)
+    tr: Tuple[float, float] = (5.0, 75.0)
+    v: Tuple[float, float] = (0.0, 4.0)
+    rh: Tuple[float, float] = (0.0, 100.0)
+
+
+class Comfort(_M):
+    index: Literal["SET"] = "SET"
+    target: Q("degC")
+    decision_basis: Literal["strict", "extended"] = "strict"
+    extended_limits: ExtendedLimits = ExtendedLimits()
+    poorly_served_attainment: float = Field(default=0.8, ge=0, le=1)
+    solar_absorptance_body: Q("-")
+    occupant_sharp_deg: List[float] = Field(
+        default=[0, 30, 60, 90, 120, 150, 180],
+        description="sun azimuth relative to body front; results averaged (random orientation)")
+
+
+class TouPeriod(_M):
+    start_h: float
+    end_h: float
+    price: Q("USD/kWh")
+
+
+class Tariffs(_M):
+    electricity: Q("USD/kWh")
+    water: Q("USD/m3")
+    time_of_use: List[TouPeriod] = []
+    discount_rate: Q("1/year")
+    season_days: Q("day")
+    horizon_note: str = ("Simulated period is a representative design day; operating quantities are "
+                         "scaled by season_days / simulated_days; capital is annualised (CRF) and "
+                         "charged once per season (one season per year).")
+
+
+class Material(_M):
+    conductivity: Q("W/(m*K)")
+    density: Q("kg/m3")
+    specific_heat: Q("J/(kg*K)")
+
+
+class Surface(_M):
+    id: str
+    kind: Literal["roof", "floor", "wall"]
+    material: str
+    thickness: Q("m")
+    nodes: Literal[1, 2] = 2
+    area_m2: Optional[float] = None
+    area_fraction: float = Field(default=1.0, gt=0)
+    emissivity: Q("-")
+    solar_absorptance_exterior: Optional[Q("-")] = None
+    solar_absorptance_interior: Optional[Q("-")] = None
+    azimuth_deg: float = 180.0
+    exterior_sky_fraction: float = Field(default=1.0, ge=0, le=1)
+    interior_sky_fraction: float = Field(default=0.0, ge=0, le=1)
+    deep_ground_temperature: Optional[Q("degC")] = None
+    ground_conductance: Optional[Q("W/(m2*K)")] = None
+
+    @model_validator(mode="after")
+    def _kind_fields(self):
+        if self.kind == "floor" and (self.deep_ground_temperature is None or self.ground_conductance is None):
+            raise ValueError(f"floor '{self.id}' needs deep_ground_temperature and ground_conductance")
+        if self.kind == "floor" and self.solar_absorptance_interior is None:
+            raise ValueError(f"floor '{self.id}' needs solar_absorptance_interior")
+        if self.kind in ("roof", "wall") and self.solar_absorptance_exterior is None:
+            raise ValueError(f"{self.kind} '{self.id}' needs solar_absorptance_exterior")
+        return self
+
+
+class SunExposure(_M):
+    mode: Literal["constant", "schedule", "canopy"]
+    value: Optional[Q("-")] = None
+    points: List[Tuple[float, float]] = []
+    canopy_height_m: Optional[float] = None
+    canopy_depth_m: Optional[float] = None
+    open_side_fraction: Optional[Q("-")] = None
+    shade_multiplier: Q("-") = Quantity(value=1.0, unit="-", source="default: no added shading")
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.mode == "constant" and self.value is None:
+            raise ValueError("sun mode 'constant' needs 'value'")
+        if self.mode == "schedule" and len(self.points) < 2:
+            raise ValueError("sun mode 'schedule' needs >= 2 [hour, fraction] points")
+        if self.mode == "canopy" and None in (self.canopy_height_m, self.canopy_depth_m, self.open_side_fraction):
+            raise ValueError("sun mode 'canopy' needs canopy_height_m, canopy_depth_m, open_side_fraction")
+        return self
+
+
+class OutdoorExchange(_M):
+    opening_area_m2: float = Field(ge=0)
+    wind_coefficient: Q("-")
+    min_flow: Q("m3/s")
+    local_wind_factor: Q("-")
+
+
+class ViewSet(_M):
+    roof: float = Field(default=0.0, ge=0, le=1)
+    walls: float = Field(default=0.0, ge=0, le=1)
+    sky: float = Field(default=0.0, ge=0, le=1)
+    floor: float = Field(default=0.0, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def _sum(self):
+        if self.roof + self.walls + self.sky + self.floor > 1.0 + 1e-9:
+            raise ValueError("view factors sum to more than 1 (remainder is 'surroundings')")
+        return self
+
+
+class Radiation(_M):
+    floor_view: ViewSet
+    occupant_view: ViewSet
+    mode: Literal["computed", "prescribed"] = "computed"
+    prescribed_mrt_minus_air: Optional[Q("K")] = None
+    prescribed_add_solar: bool = True
+
+    @model_validator(mode="after")
+    def _p(self):
+        if self.mode == "prescribed" and self.prescribed_mrt_minus_air is None:
+            raise ValueError("prescribed radiant mode needs prescribed_mrt_minus_air")
+        return self
+
+
+class Occupancy(_M):
+    column: Optional[str] = None
+    met: Q("met")
+    clo: Q("clo")
+    posture: Literal["standing", "sitting"] = "standing"
+
+
+class ExposureGroup(_M):
+    id: str
+    occupant_share: float = Field(ge=0, le=1)
+
+
+class Initial(_M):
+    air: Union[Literal["outdoor"], Q("degC")] = "outdoor"
+    humidity_ratio: Union[Literal["outdoor"], Q("kg/kg")] = "outdoor"
+    surfaces: Union[Literal["outdoor_air"], Q("degC")] = "outdoor_air"
+
+
+class Section(_M):
+    id: str
+    name: str
+    template: Optional[str] = None
+    template_description: str = ""
+    footprint: List[Tuple[float, float]] = Field(min_length=3)
+    height_m: float = Field(gt=0)
+    volume_factor: Q("-")
+    surfaces: List[Surface]
+    sun: SunExposure
+    outdoor: OutdoorExchange
+    radiation: Radiation
+    occupancy: Occupancy
+    exposure_groups: List[ExposureGroup] = [ExposureGroup(id="all", occupant_share=1.0)]
+    initial: Initial = Initial()
+
+    @model_validator(mode="after")
+    def _check(self):
+        ids = [s.id for s in self.surfaces]
+        if len(set(ids)) != len(ids):
+            raise ValueError(f"section {self.id}: duplicate surface ids")
+        if sum(1 for s in self.surfaces if s.kind == "floor") != 1:
+            raise ValueError(f"section {self.id}: exactly one floor surface is required")
+        if sum(1 for s in self.surfaces if s.kind == "roof") > 1:
+            raise ValueError(f"section {self.id}: at most one roof surface")
+        share = sum(g.occupant_share for g in self.exposure_groups)
+        if abs(share - 1.0) > 1e-6:
+            raise ValueError(f"section {self.id}: exposure group shares sum to {share}, not 1")
+        return self
+
+    @property
+    def area_m2(self) -> float:
+        pts = self.footprint
+        a = 0.0
+        for i in range(len(pts)):
+            x1, y1 = pts[i]
+            x2, y2 = pts[(i + 1) % len(pts)]
+            a += x1 * y2 - x2 * y1
+        return abs(a) / 2.0
+
+    @property
+    def centroid(self) -> Tuple[float, float]:
+        xs = [p[0] for p in self.footprint]
+        ys = [p[1] for p in self.footprint]
+        return sum(xs) / len(xs), sum(ys) / len(ys)
+
+
+class Connection(_M):
+    id: str
+    a: str
+    b: str
+    opening_area_m2: float = Field(ge=0)
+    wind_coefficient: Q("-")
+    min_flow: Q("m3/s")
+
+
+class DevicePreset(_M):
+    kind: Literal["fan", "evaporative"]
+    label: str
+    claim: str = ""
+    electric_power: Q("W")
+    airflow: Q("m3/s")
+    covered_air_speed: Q("m/s")
+    saturation_effectiveness: Optional[Q("-")] = None
+    bleed_fraction: Q("-") = Quantity(value=0.0, unit="-", source="default: none")
+    plume_fraction: Q("-") = Quantity(value=0.0, unit="-", source="default: fully mixed")
+    motor_heat_to_air: Q("-") = Quantity(value=1.0, unit="-", source="all electrical input ends as heat in served air")
+    capital_cost: Q("USD")
+    lifetime: Q("year")
+    maintenance: Q("USD/year")
+    default_intake: Literal["outdoor", "recirculate"] = "recirculate"
+
+    @model_validator(mode="after")
+    def _physical(self):
+        if self.electric_power.value < 0:
+            raise ValueError("electric_power must be >= 0")
+        if self.airflow.value <= 0:
+            raise ValueError("airflow must be > 0")
+        if self.covered_air_speed.value < 0:
+            raise ValueError("covered_air_speed must be >= 0")
+        if not 0.0 <= self.plume_fraction.value <= 1.0:
+            raise ValueError("plume_fraction (coverage fraction) must lie in [0, 1]")
+        if self.bleed_fraction.value < 0:
+            raise ValueError("bleed_fraction must be >= 0")
+        if not 0.0 <= self.motor_heat_to_air.value <= 1.0:
+            raise ValueError("motor_heat_to_air must lie in [0, 1]")
+        if self.kind == "evaporative" and self.saturation_effectiveness is None:
+            raise ValueError("evaporative presets need saturation_effectiveness")
+        if self.saturation_effectiveness is not None and not 0 <= self.saturation_effectiveness.value <= 1:
+            raise ValueError("saturation_effectiveness must lie in [0, 1]")
+        return self
+
+
+class Serve(_M):
+    section: str
+    airflow_fraction: float = Field(gt=0, le=1)
+    groups: Optional[List[str]] = None
+
+
+class Schedule(_M):
+    mode: Literal["always", "hours", "occupied_hot", "never"]
+    intervals: List[Tuple[float, float]] = []
+    outdoor_threshold: Optional[Q("degC")] = None
+
+    @model_validator(mode="after")
+    def _c(self):
+        if self.mode == "occupied_hot" and self.outdoor_threshold is None:
+            raise ValueError("occupied_hot schedules need outdoor_threshold")
+        return self
+
+
+class Device(_M):
+    id: str
+    preset: str
+    intake: Optional[Literal["outdoor", "recirculate"]] = None
+    serves: List[Serve] = Field(min_length=1)
+    schedule: str
+    overrides: Dict[str, Quantity] = {}
+
+    @model_validator(mode="after")
+    def _f(self):
+        tot = sum(s.airflow_fraction for s in self.serves)
+        if abs(tot - 1.0) > 1e-6:
+            raise ValueError(f"device {self.id}: airflow fractions sum to {tot}; must reconcile to 1")
+        if len({s.section for s in self.serves}) != len(self.serves):
+            raise ValueError(f"device {self.id}: a section is listed twice in 'serves'")
+        return self
+
+
+def apply_device_overrides(preset: DevicePreset, overrides: Dict[str, Quantity], where: str) -> DevicePreset:
+    """Merge overrides into a preset, convert each quantity to its canonical unit, and re-validate.
+
+    Overrides are stored as plain Quantities (so a kW value is not converted at parse time).
+    Re-validating the merged preset runs the ``Q(...)`` converters and the physical bounds.
+    """
+    if not overrides:
+        return preset
+    data = preset.model_dump()
+    for k, q in overrides.items():
+        if k not in DevicePreset.model_fields:
+            raise ValueError(f"{where}: override of unknown preset field {k}")
+        data[k] = q.model_dump() if isinstance(q, Quantity) else q
+    try:
+        return DevicePreset.model_validate(data)
+    except ValidationError as e:
+        raise ValueError(f"{where}: invalid override: {e}") from e
+
+
+class PassiveOption(_M):
+    id: str
+    description: str
+    set: Dict[str, Any]
+    capital_cost: Q("USD")
+    lifetime: Q("year")
+    maintenance: Q("USD/year")
+
+
+class Scenario(_M):
+    id: str
+    description: str = ""
+    devices: List[str] = []
+    passive: List[str] = []
+
+
+class SearchSlot(_M):
+    id: str
+    serves: List[Serve]
+    options: List[str] = Field(description="preset ids or 'none'; 'preset*N' places N units")
+    intake: Optional[Literal["outdoor", "recirculate"]] = None
+
+
+class SearchTarget(_M):
+    min_attainment: float = Field(ge=0, le=1)
+    min_section_attainment: float = Field(default=0.0, ge=0, le=1)
+    max_unassessed_fraction: float = Field(default=0.05, ge=0, le=1)
+
+
+class SearchConstraints(_M):
+    max_devices: int = 6
+    max_investment_usd: float = 1e9
+    max_water_m3_per_day: float = 1e9
+
+
+class SearchSpec(_M):
+    objective: Literal["energy", "cost"] = "energy"
+    target: SearchTarget
+    constraints: SearchConstraints = SearchConstraints()
+    slots: List[SearchSlot]
+    schedules: List[str]
+    passive_options: List[str] = []
+    max_configurations: int = 20000
+
+
+class UncertaintySpec(_M):
+    samples: int = 64
+    seed: int = 12345
+    parameters: Union[Literal["all"], List[str]] = "all"
+    scenarios: List[str] = []
+
+
+class VenueConfig(_M):
+    meta: Meta
+    site: Site
+    weather: FileRef
+    occupancy: FileRef
+    simulation: Simulation = Simulation()
+    airflow: AirflowSpec = AirflowSpec()
+    physics: Physics
+    comfort: Comfort
+    tariffs: Tariffs
+    materials: Dict[str, Material]
+    templates: Dict[str, Any] = {}
+    sections: List[Section]
+    connections: List[Connection] = []
+    device_presets: Dict[str, DevicePreset]
+    devices: List[Device] = []
+    schedules: Dict[str, Schedule] = {}
+    passive_options: List[PassiveOption] = []
+    scenarios: List[Scenario] = []
+    search: Optional[SearchSpec] = None
+    uncertainty: Optional[UncertaintySpec] = None
+    base_dir: str = "."
+
+    @model_validator(mode="after")
+    def _cross(self):
+        sec = {s.id: s for s in self.sections}
+        if len(sec) != len(self.sections):
+            raise ValueError("duplicate section ids")
+        for s in self.sections:
+            for surf in s.surfaces:
+                if surf.material not in self.materials:
+                    raise ValueError(f"section {s.id} surface {surf.id}: unknown material {surf.material}")
+        cids = set()
+        for c in self.connections:
+            if c.a not in sec or c.b not in sec or c.a == c.b:
+                raise ValueError(f"connection {c.id} must join two distinct existing sections")
+            if c.id in cids:
+                raise ValueError(f"duplicate connection id {c.id}")
+            cids.add(c.id)
+        dids = set()
+        for d in self.devices:
+            if d.id in dids:
+                raise ValueError(f"duplicate device id {d.id}: each physical device has one ledger")
+            dids.add(d.id)
+            if d.preset not in self.device_presets:
+                raise ValueError(f"device {d.id}: unknown preset {d.preset}")
+            if d.schedule not in self.schedules:
+                raise ValueError(f"device {d.id}: unknown schedule {d.schedule}")
+            _check_serves(d.serves, sec, f"device {d.id}")
+            apply_device_overrides(self.device_presets[d.preset], d.overrides, f"device {d.id}")
+        pids = {p.id for p in self.passive_options}
+        for sc in self.scenarios:
+            for d in sc.devices:
+                if d not in dids:
+                    raise ValueError(f"scenario {sc.id}: unknown device {d}")
+            for p in sc.passive:
+                if p not in pids:
+                    raise ValueError(f"scenario {sc.id}: unknown passive option {p}")
+        if self.search:
+            for sl in self.search.slots:
+                _check_serves(sl.serves, sec, f"search slot {sl.id}")
+                for o in sl.options:
+                    name = o.split("*")[0]
+                    if name != "none" and name not in self.device_presets:
+                        raise ValueError(f"search slot {sl.id}: unknown preset option {o}")
+            for s in self.search.schedules:
+                if s not in self.schedules:
+                    raise ValueError(f"search: unknown schedule {s}")
+            for p in self.search.passive_options:
+                if p not in pids:
+                    raise ValueError(f"search: unknown passive option {p}")
+        return self
+
+    def section(self, sid: str) -> Section:
+        return next(s for s in self.sections if s.id == sid)
+
+    def path(self, rel: str) -> Path:
+        p = Path(rel)
+        return p if p.is_absolute() else Path(self.base_dir) / p
+
+
+def _check_serves(serves, sec, where):
+    for s in serves:
+        if s.section not in sec:
+            raise ValueError(f"{where}: unknown section {s.section}")
+        gids = {g.id for g in sec[s.section].exposure_groups}
+        for g in s.groups or []:
+            if g not in gids:
+                raise ValueError(f"{where}: section {s.section} has no exposure group {g}")
+    if abs(sum(s.airflow_fraction for s in serves) - 1.0) > 1e-6:
+        raise ValueError(f"{where}: airflow fractions must sum to 1")
+
+
+# --------------------------------------------------------------------------- raw dict handling
+def _read_mapping(path: Path) -> dict:
+    text = path.read_text()
+    raw = json.loads(text) if path.suffix.lower() == ".json" else yaml.safe_load(text)
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: configuration must be a mapping")
+    return raw
+
+
+def load_raw(path: Union[str, Path]) -> dict:
+    """Read YAML/JSON. ``include: [files]`` are merged first (the including file wins)."""
+    path = Path(path)
+    return _with_includes(_read_mapping(path), path.resolve().parent)
+
+
+def load_raw_text(text: str, base_dir: Union[str, Path], fmt: str = "yaml") -> dict:
+    """Same as :func:`load_raw` for configuration text (e.g. edited in the dashboard)."""
+    raw = json.loads(text) if fmt == "json" else yaml.safe_load(text)
+    if not isinstance(raw, dict):
+        raise ValueError("configuration must be a mapping")
+    return _with_includes(raw, Path(base_dir).resolve())
+
+
+def _with_includes(raw: dict, base: Path) -> dict:
+    merged: dict = {}
+    for inc in raw.pop("include", []) or []:
+        merged = deep_merge(merged, load_raw(base / inc))
+        merged.pop("base_dir", None)
+    raw = deep_merge(merged, raw) if merged else raw
+    raw.setdefault("base_dir", str(base))
+    return raw
+
+
+def deep_merge(base: Any, over: Any) -> Any:
+    """Merge ``over`` into a deep copy of ``base``. Lists of dicts with 'id' are merged by id.
+
+    Quantity dicts (value/unit/source) are atomic: an override replaces value, unit, provenance
+    and bounds together, so template bounds never leak onto an overridden value.
+    """
+    if isinstance(over, dict) and {"value", "unit", "source"} <= set(over):
+        return copy.deepcopy(over)
+    if isinstance(base, dict) and isinstance(over, dict):
+        out = copy.deepcopy(base)
+        for k, v in over.items():
+            out[k] = deep_merge(out[k], v) if k in out else copy.deepcopy(v)
+        return out
+    if (isinstance(base, list) and isinstance(over, list) and base and over
+            and all(isinstance(x, dict) and "id" in x for x in base + over)):
+        out = [copy.deepcopy(x) for x in base]
+        idx = {x["id"]: i for i, x in enumerate(out)}
+        for x in over:
+            if x["id"] in idx:
+                out[idx[x["id"]]] = deep_merge(out[idx[x["id"]]], x)
+            else:
+                out.append(copy.deepcopy(x))
+        return out
+    return copy.deepcopy(over)
+
+
+def expand_templates(raw: dict) -> dict:
+    raw = copy.deepcopy(raw)
+    templates = raw.get("templates", {}) or {}
+    out = []
+    for s in raw.get("sections", []):
+        t = s.get("template")
+        if t:
+            if t not in templates:
+                raise ValueError(f"section {s.get('id')}: unknown template {t}")
+            tmpl = copy.deepcopy(templates[t])
+            desc = tmpl.pop("description", "")
+            merged = deep_merge(tmpl, s)
+            merged.setdefault("template_description", desc)
+            out.append(merged)
+        else:
+            out.append(copy.deepcopy(s))
+    raw["sections"] = out
+    return raw
+
+
+_TOK = re.compile(r"([^.\[\]]+)(?:\[([^\]]+)\])?")
+
+
+def _split(path: str):
+    toks = []
+    for part in path.split("."):
+        m = _TOK.fullmatch(part)
+        if not m:
+            raise ValueError(f"bad override path element '{part}' in '{path}'")
+        toks.append((m.group(1), m.group(2)))
+    return toks
+
+
+def _descend(node, key, sel, create=False):
+    if key not in node:
+        if create:
+            node[key] = {}
+        else:
+            raise KeyError(f"path key '{key}' not found")
+    node = node[key]
+    if sel is not None:
+        if not isinstance(node, list):
+            raise KeyError(f"'{key}' is not a list; cannot select [{sel}]")
+        hits = [x for x in node if isinstance(x, dict) and str(x.get("id")) == sel]
+        if not hits:
+            raise KeyError(f"no item with id '{sel}' in '{key}'")
+        node = hits[0]
+    return node
+
+
+def get_path(raw: dict, path: str):
+    toks = _split(path)
+    node = raw
+    for key, sel in toks:
+        node = _descend(node, key, sel)
+    return node
+
+
+def set_path(raw: dict, path: str, value, create_missing: bool = False) -> None:
+    if "::" in path:
+        # "<path to a passive option's set mapping>::<override path>[.value]"
+        outer, inner = path.split("::", 1)
+        mapping = get_path(raw, outer)
+        key = inner[:-len(".value")] if inner.endswith(".value") and inner not in mapping else inner
+        if key not in mapping:
+            raise KeyError(f"passive override '{inner}' not found under '{outer}'")
+        if key != inner:
+            mapping[key] = {**mapping[key], "value": copy.deepcopy(value)}
+        else:
+            mapping[key] = copy.deepcopy(value)
+        return
+    toks = _split(path)
+    node = raw
+    for key, sel in toks[:-1]:
+        node = _descend(node, key, sel, create=create_missing)
+    key, sel = toks[-1]
+    if sel is not None:
+        node = _descend(node, key, None)
+        hits = [i for i, x in enumerate(node) if isinstance(x, dict) and str(x.get("id")) == sel]
+        if not hits:
+            raise KeyError(f"no item with id '{sel}' in '{key}'")
+        node[hits[0]] = copy.deepcopy(value)
+        return
+    if not isinstance(node, dict):
+        raise KeyError(f"override target parent of '{path}' is not a mapping")
+    # creating the final key is allowed: the schema forbids unknown fields, so typos still fail
+    node[key] = copy.deepcopy(value)
+
+
+def find_uncertain(raw: dict, prefix: str = "") -> List[Tuple[str, dict]]:
+    """List (path_to_value, quantity_dict) for every quantity that declares bounds."""
+    found = []
+    if isinstance(raw, dict):
+        if {"value", "unit", "source"} <= set(raw) and raw.get("bounds") is not None:
+            return [(prefix + ".value" if prefix else "value", raw)]
+        for k, v in raw.items():
+            if k == "templates":
+                continue
+            if k == "set" and prefix.startswith("passive_options[") and isinstance(v, dict):
+                for inner, q in v.items():
+                    if isinstance(q, dict) and {"value", "unit", "source"} <= set(q) and q.get("bounds") is not None:
+                        found.append((f"{prefix}.set::{inner}.value", q))
+                continue
+            found += find_uncertain(v, f"{prefix}.{k}" if prefix else k)
+    elif isinstance(raw, list):
+        for i, x in enumerate(raw):
+            sel = x.get("id") if isinstance(x, dict) else None
+            if sel is None:
+                continue
+            found += find_uncertain(x, f"{prefix}[{sel}]")
+    return found
+
+
+def apply_passive(raw: dict, option: dict) -> None:
+    for path, value in option["set"].items():
+        set_path(raw, path, value)
+
+
+def build(raw: dict, passive: Optional[List[str]] = None) -> VenueConfig:
+    """Expand templates, apply passive options (by id), validate."""
+    r = expand_templates(raw)
+    opts = {p["id"]: p for p in r.get("passive_options", [])}
+    for pid in passive or []:
+        if pid not in opts:
+            raise ValueError(f"unknown passive option {pid}")
+        apply_passive(r, opts[pid])
+    return VenueConfig.model_validate(r)
+
+
+def load_config(path, passive=None) -> VenueConfig:
+    return build(load_raw(path), passive)
+
+
+===== FILE: venuecool/model.py =====
+"""Transient coupled section model.
+
+State vector y (SI):
+  h[i]     moist-air enthalpy of section i air            [J/kg_da]
+  W[i]     humidity ratio of section i air                [kg_w/kg_da]
+  T[n]     surface node temperatures                      [degC]
+  accumulators (do not feed back): boundary energy [J], boundary water [kg], gross |energy| [J],
+  gross |water| [kg], per-device evaporated water [kg], per-section enthalpy-flow breakdown [J].
+
+Air balances (dry-air mass M_i constant, all exchanges balanced in dry-air mass):
+  M_i dh_i/dt = sum_src m_src (h_src - h_i) + Q_conv,i + Q_occ,i
+  M_i dW_i/dt = sum_src m_src (W_src - W_i) + G_occ,i
+Sources: outdoor exchange, inter-section exchange (equal and opposite), device delivery.
+Surfaces: lumped RC nodes with solar absorption, convection, conduction, ground coupling and
+grey-body longwave exchange (pairwise floor-roof / floor-wall with reciprocity, plus sky and
+surroundings).
+"""
+
+from __future__ import annotations
+
+import time as _time
+import warnings
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+
+import numpy as np
+from scipy.integrate import solve_ivp
+
+from . import psychro, solar
+from .airflow import make_airflow
+from .config import Schedule, VenueConfig, apply_device_overrides
+from .constants import MET_W_M2, SIGMA, T0K
+from .devices import outlet_state
+from .inputs import OccupancySchedule, Weather
+
+DAY = 86400.0
+DT_FINE = 60.0
+N_BRK = 5
+BREAKDOWN_NAMES = ["outdoor_exchange", "internal_exchange", "surface_convection", "occupants", "devices"]
+
+
+# --------------------------------------------------------------------------- devices
+@dataclass
+class ResolvedDevice:
+    id: str
+    preset: str
+    kind: str
+    label: str
+    power_W: float
+    airflow_m3s: float
+    covered_air_speed: float
+    eff: float
+    bleed: float
+    plume: float
+    motor_heat: float
+    capital_usd: float
+    lifetime_y: float
+    maintenance_usd_y: float
+    intake: str
+    serves: list  # [(section_index, fraction, [group ids])]
+    schedule: Schedule
+    schedule_name: str
+
+
+def resolve_devices(cfg: VenueConfig, device_ids: List[str]) -> List[ResolvedDevice]:
+    by_id = {d.id: d for d in cfg.devices}
+    sidx = {s.id: i for i, s in enumerate(cfg.sections)}
+    out = []
+    for did in device_ids:
+        d = by_id[did]
+        p = apply_device_overrides(cfg.device_presets[d.preset], d.overrides, f"device {d.id}")
+        g = lambda k: (getattr(p, k).value if getattr(p, k) is not None else 0.0)  # noqa: E731
+        serves = []
+        for s in d.serves:
+            groups = s.groups or [x.id for x in cfg.section(s.section).exposure_groups]
+            serves.append((sidx[s.section], s.airflow_fraction, groups))
+        out.append(ResolvedDevice(
+            id=d.id, preset=d.preset, kind=p.kind, label=p.label, power_W=g("electric_power"),
+            airflow_m3s=g("airflow"), covered_air_speed=g("covered_air_speed"),
+            eff=g("saturation_effectiveness") if p.kind == "evaporative" else 0.0,
+            bleed=g("bleed_fraction"), plume=g("plume_fraction"), motor_heat=g("motor_heat_to_air"),
+            capital_usd=g("capital_cost"), lifetime_y=g("lifetime"), maintenance_usd_y=g("maintenance"),
+            intake=d.intake or p.default_intake, serves=serves, schedule=cfg.schedules[d.schedule],
+            schedule_name=d.schedule))
+    return out
+
+
+# --------------------------------------------------------------------------- helpers
+def sun_fraction(sec, hour_of_day, alt_deg):
+    s = sec.sun
+    mult = s.shade_multiplier.value
+    alt = np.asarray(alt_deg, float)
+    if s.mode == "constant":
+        f = np.full_like(alt, s.value.value)
+    elif s.mode == "schedule":
+        pts = np.array(s.points, float)
+        f = np.interp(hour_of_day, pts[:, 0], pts[:, 1])
+    else:
+        tan_alt = np.tan(np.radians(np.maximum(alt, 0.1)))
+        f = s.open_side_fraction.value * np.minimum(1.0, s.canopy_height_m / (s.canopy_depth_m * tan_alt))
+    return np.where(alt > 0, f * mult, 0.0)
+
+
+def sky_temperature(t_c, w, p):
+    tdp = psychro.dew_point(w, p)
+    eps = 0.711 + 0.56 * (tdp / 100.0) + 0.73 * (tdp / 100.0) ** 2  # Berdahl & Martin (1984), clear sky
+    return eps ** 0.25 * (np.asarray(t_c) + T0K) - T0K
+
+
+@dataclass
+class SimResult:
+    ok: bool
+    message: str
+    section_ids: List[str]
+    t: np.ndarray  # output endpoint times [s] (reporting window)
+    h: np.ndarray  # [nt, n_sec]
+    W: np.ndarray
+    T_air: np.ndarray
+    RH: np.ndarray
+    T_nodes: np.ndarray  # [nt, n_nodes]
+    node_info: List[dict]
+    drivers: Dict[str, np.ndarray]  # outdoor conditions at endpoints
+    mid: Dict[str, np.ndarray]  # midpoint quantities for interval metrics
+    device_on: np.ndarray  # [n_int, n_dev] bool
+    device_outlet_h: np.ndarray  # [n_int, n_dev] at interval midpoints
+    device_outlet_W: np.ndarray
+    ledgers: List[dict]
+    breakdown_J: Dict[str, Dict[str, float]]
+    conservation: Dict[str, float]
+    invalid: Dict[str, int]
+    invalid_mask: np.ndarray  # [nt, n_sec] bool
+    runtime_s: float
+    n_rhs: int
+
+
+class Model:
+    def __init__(self, cfg: VenueConfig, weather: Weather, occ: OccupancySchedule,
+                 device_ids: Optional[List[str]] = None, airflow=None):
+        self.cfg = cfg
+        self.wx = weather
+        self.occ = occ
+        self.devs = resolve_devices(cfg, device_ids or [])
+        self.airflow = airflow or make_airflow(cfg)
+        sim = cfg.simulation
+        self.t0 = sim.start_h * 3600.0
+        self.t1 = sim.end_h * 3600.0
+        if self.t1 <= self.t0:
+            raise ValueError("simulation.end_h must exceed start_h")
+        self.ts = self.t0 - sim.warmup_days * DAY
+        need_end = max(self.t1, self.t0 + DAY if sim.warmup_days > 0 else self.t1)
+        if weather.t_s[0] > self.t0 + 1e-6 or weather.t_s[-1] < need_end - 1e-6:
+            raise ValueError(
+                f"weather covers {weather.t_s[0]/3600:.1f}-{weather.t_s[-1]/3600:.1f} h but the run needs "
+                f"{self.t0/3600:.1f}-{need_end/3600:.1f} h (warm-up cycles the first 24 h)")
+        self._compile()
+
+    # ------------------------------------------------------------------ compile
+    def _wrap(self, t):
+        t = np.asarray(t, float)
+        return np.where(t >= self.t0, t, self.t0 + np.mod(t - self.t0, DAY))
+
+    def _compile(self):
+        cfg = self.cfg
+        secs = cfg.sections
+        n = self.n = len(secs)
+        self.sec_ids = [s.id for s in secs]
+        site = cfg.site
+        ph = cfg.physics
+        self.conv_a, self.conv_b = ph.convection_a.value, ph.convection_b.value
+        self.still = ph.still_air_speed.value
+        tab = np.array(ph.occupant_sensible_fraction, float)
+        self.fs_T, self.fs_f = tab[:, 0], tab[:, 1]
+        self.lwf = np.array([s.outdoor.local_wind_factor.value for s in secs])
+        self.met_W = np.array([s.occupancy.met.value * MET_W_M2 * ph.body_surface_area.value for s in secs])
+        self.occ_cols = [s.occupancy.column or s.id for s in secs]
+        sidx = {s.id: i for i, s in enumerate(secs)}
+        self.conn_a = np.array([sidx[c.a] for c in cfg.connections], int)
+        self.conn_b = np.array([sidx[c.b] for c in cfg.connections], int)
+
+        # ---- surfaces
+        nodes = []  # dicts
+        cond = []  # (i, j, K)
+        ground = []  # (node, UA, Tg)
+        pairs = []  # (ni, nj, coef)
+        env = []  # (node, coef_sky, coef_sur)
+        int_conv = []  # (node, sec, A)
+        ext_conv = []  # (node, A)
+        solar_spec = []  # (node, type, A, alpha, extra)
+        self.floor_node, self.roof_node, self.wall_nodes = {}, {}, {}
+        vol = []
+        for i, s in enumerate(secs):
+            A_sec = s.area_m2
+            vol.append(A_sec * s.height_m * s.volume_factor.value)
+            fv = s.radiation.floor_view
+            surf_nodes = {}
+            areas = {}
+            for su in s.surfaces:
+                m = cfg.materials[su.material]
+                if su.kind == "wall" and su.area_m2 is None:
+                    raise ValueError(f"section {s.id} wall {su.id}: area_m2 required")
+                A = su.area_m2 if su.area_m2 is not None else A_sec * su.area_fraction
+                areas[su.id] = A
+                C = m.density.value * m.specific_heat.value * A * su.thickness.value
+                ids = []
+                for layer in range(su.nodes):
+                    ids.append(len(nodes))
+                    nodes.append(dict(section=s.id, sec=i, surface=su.id, kind=su.kind,
+                                      layer=("interior" if layer == 0 else "exterior"), C=C / su.nodes, A=A))
+                if su.nodes == 2:
+                    cond.append((ids[0], ids[1], m.conductivity.value * A / su.thickness.value))
+                surf_nodes[su.id] = (su, ids, A)
+                nin, nex = ids[0], ids[-1]
+                int_conv.append((nin, i, A))
+                if su.kind == "floor":
+                    self.floor_node[i] = nin
+                    ground.append((nex, su.ground_conductance.value * A, su.deep_ground_temperature.value))
+                    solar_spec.append((nin, "floor", A, su.solar_absorptance_interior.value, i))
+                else:
+                    ext_conv.append((nex, A))
+                    fsky = su.exterior_sky_fraction
+                    env.append((nex, SIGMA * su.emissivity.value * A * fsky,
+                                SIGMA * su.emissivity.value * A * (1 - fsky)))
+                    if su.kind == "roof":
+                        self.roof_node[i] = nin
+                        solar_spec.append((nex, "roof", A, su.solar_absorptance_exterior.value, None))
+                    else:
+                        self.wall_nodes.setdefault(i, []).append(nin)
+                        solar_spec.append((nex, "wall", A, su.solar_absorptance_exterior.value, su.azimuth_deg))
+            # interior longwave network
+            floor = next(v for v in surf_nodes.values() if v[0].kind == "floor")
+            roof = next((v for v in surf_nodes.values() if v[0].kind == "roof"), None)
+            walls = [v for v in surf_nodes.values() if v[0].kind == "wall"]
+            fsu, fids, fA = floor
+            eps_f = fsu.emissivity.value
+            if fv.roof > 0 and roof is None:
+                raise ValueError(f"section {s.id}: floor_view.roof > 0 but no roof surface")
+            if fv.walls > 0 and not walls:
+                raise ValueError(f"section {s.id}: floor_view.walls > 0 but no wall surfaces")
+            f_sur = 1.0 - fv.roof - fv.walls - fv.sky
+            env.append((fids[0], SIGMA * eps_f * fA * fv.sky, SIGMA * eps_f * fA * f_sur))
+            if roof is not None:
+                rsu, rids, rA = roof
+                F_rf = fA * fv.roof / rA
+                if F_rf > 1 + 1e-9:
+                    raise ValueError(f"section {s.id}: roof->floor view {F_rf:.2f} > 1 (reciprocity)")
+                pairs.append((fids[0], rids[0], SIGMA * eps_f * rsu.emissivity.value * fA * fv.roof))
+                env.append((rids[0], 0.0, SIGMA * rsu.emissivity.value * rA * (1 - F_rf)))
+            if walls:
+                wA_tot = sum(w[2] for w in walls)
+                for wsu, wids, wA in walls:
+                    F_fw = fv.walls * wA / wA_tot
+                    F_wf = fA * F_fw / wA
+                    if F_wf > 1 + 1e-9:
+                        raise ValueError(f"section {s.id}: wall {wsu.id} -> floor view > 1")
+                    pairs.append((fids[0], wids[0], SIGMA * eps_f * wsu.emissivity.value * fA * F_fw))
+                    rem = 1 - F_wf
+                    e = SIGMA * wsu.emissivity.value * wA
+                    env.append((wids[0], e * rem * wsu.interior_sky_fraction, e * rem * (1 - wsu.interior_sky_fraction)))
+        self.node_info = nodes
+        self.nn = len(nodes)
+        self.C = np.array([x["C"] for x in nodes])
+        self.cond = np.array(cond, float).reshape(-1, 3)
+        self.ground = np.array(ground, float).reshape(-1, 3)
+        self.pairs = np.array(pairs, float).reshape(-1, 3)
+        self.env = np.array(env, float).reshape(-1, 3)
+        ic = np.array(int_conv, float).reshape(-1, 3)
+        self.ic_node, self.ic_sec, self.ic_A = ic[:, 0].astype(int), ic[:, 1].astype(int), ic[:, 2]
+        ec = np.array(ext_conv, float).reshape(-1, 2)
+        self.ec_node, self.ec_A = ec[:, 0].astype(int), ec[:, 1]
+        self.vol = np.array(vol)
+
+        # ---- driver table on a fine grid (time-only inputs)
+        tg = np.arange(self.ts, self.t1 + DT_FINE, DT_FINE)
+        tw = self._wrap(tg)
+        To, Wo, p, U, ghi, dni, dhi = self.wx.at(tw)
+        hour = np.mod(tw / 3600.0, 24.0)
+        alt, az = solar.solar_position(hour, site.day_of_year, site.latitude_deg, site.longitude_deg, site.utc_offset_h)
+        sin_alt = np.maximum(np.sin(np.radians(alt)), 0.0)
+        dni = np.where(alt > 0, dni, 0.0)
+        fsun = np.stack([sun_fraction(s, hour, alt) for s in secs], axis=1)
+        sol = np.zeros((len(tg), self.nn))
+        for node, typ, A, alpha, extra in solar_spec:
+            if typ == "roof":
+                sol[:, node] += alpha * A * ghi
+            elif typ == "wall":
+                sol[:, node] += alpha * A * (dni * solar.vertical_beam_factor(alt, az, extra) + 0.5 * dhi + 0.5 * 0.2 * ghi)
+            else:
+                fsky = secs[extra].radiation.floor_view.sky
+                sol[:, node] += alpha * A * (fsun[:, extra] * dni * sin_alt + fsky * dhi)
+        Qo, Qc = self.airflow.flows(U)
+        rho = psychro.rho_da(To, Wo, p)
+        self.tg = tg
+        self.drv = dict(To=To, Wo=Wo, p=p, U=U, ghi=ghi, dni=dni, dhi=dhi, alt=alt, az=az,
+                        Tsky=sky_temperature(To, Wo, p), ho=psychro.enthalpy(To, Wo), rho=rho,
+                        fsun=fsun, sol=sol, Qo=Qo, Qc=Qc, hour=hour)
+        # dry-air masses from reference density at the run start (labelled: constant M_i)
+        self.M = self.vol * rho[0]
+
+        # ---- devices
+        nd = self.nd = len(self.devs)
+        self.F = np.zeros((nd, n))
+        for d, dev in enumerate(self.devs):
+            for si, frac, _ in dev.serves:
+                self.F[d, si] = frac
+        self.d_air = np.array([d.airflow_m3s for d in self.devs])
+        self.d_evap = np.array([d.kind == "evaporative" for d in self.devs], bool)
+        self.d_eff = np.array([d.eff for d in self.devs])
+        self.d_heat = np.array([d.power_W * d.motor_heat for d in self.devs])
+        self.d_out = np.array([d.intake == "outdoor" for d in self.devs], bool)
+
+        # ---- segments
+        self._build_segments()
+
+        # ---- state layout
+        self.i_h = slice(0, n)
+        self.i_w = slice(n, 2 * n)
+        self.i_T = slice(2 * n, 2 * n + self.nn)
+        self.n_phys = 2 * n + self.nn
+        # the state size must not depend on the number of devices: the solver's RMS error norm
+        # would otherwise change step selection, and an idle device would perturb the baseline
+        self.i_acc = self.n_phys
+        self.i_evap = self.n_phys + 4
+        self.i_brk = slice(self.n_phys + 5, self.n_phys + 5 + N_BRK * n)
+        self.ny = self.n_phys + 5 + N_BRK * n
+
+    def _schedule_on(self, sch: Schedule, t_mid, served_secs):
+        tw = float(self._wrap(t_mid))
+        hod = (tw / 3600.0) % 24.0
+        if sch.mode == "always":
+            return True
+        if sch.mode == "never":
+            return False
+        if sch.mode == "hours":
+            return any(a <= hod < b for a, b in sch.intervals)
+        To = float(self.wx.at(tw)[0])
+        people = sum(self.occ.at(self.occ_cols[i], tw) for i in served_secs)
+        in_hours = (not sch.intervals) or any(a <= hod < b for a, b in sch.intervals)
+        return bool(people > 0 and To >= sch.outdoor_threshold.value and in_hours)
+
+    def _build_segments(self):
+        day_pts = set()
+        for tt in self.wx.t_s:
+            day_pts.add(float(tt))
+        for tt in self.occ.t_s:
+            day_pts.add(float(tt))
+        hrs = []
+        for dev in self.devs:
+            for a, b in dev.schedule.intervals:
+                hrs += [a, b]
+        for tou in self.cfg.tariffs.time_of_use:
+            hrs += [tou.start_h, tou.end_h]
+        hrs += list(range(25))
+        span_days = int(np.ceil((self.t1 - self.t0) / DAY)) + 1
+        for d0 in range(-1, span_days + 1):
+            for hh in hrs:
+                day_pts.add(d0 * DAY + hh * 3600.0)
+        rep = sorted(x for x in day_pts if self.t0 <= x <= self.t1)
+        first_day = sorted(x - self.t0 for x in day_pts if self.t0 <= x < self.t0 + DAY)
+        warm = []
+        for k in range(self.cfg.simulation.warmup_days, 0, -1):
+            base = self.t0 - k * DAY
+            warm += [base + x for x in first_day]
+        pts = sorted(set(warm + rep + [self.ts, self.t0, self.t1]))
+        pts = [x for x in pts if self.ts <= x <= self.t1]
+        segs = []
+        for a, b in zip(pts[:-1], pts[1:]):
+            if b - a < 1e-6:
+                continue
+            mid = 0.5 * (a + b)
+            tw = float(self._wrap(mid))
+            N = np.array([self.occ.at(c, tw) for c in self.occ_cols], float)
+            on = np.array([self._schedule_on(d.schedule, mid, [s[0] for s in d.serves]) for d in self.devs], bool)
+            segs.append((a, b, N, on))
+        self.segments = segs
+
+    # ------------------------------------------------------------------ physics
+    def _drivers(self, t):
+        x = (t - self.ts) / DT_FINE
+        i = int(min(max(np.floor(x), 0), len(self.tg) - 2))
+        f = min(max(x - i, 0.0), 1.0)
+        d = self.drv
+        g = lambda a: a[i] + f * (a[i + 1] - a[i])  # noqa: E731
+        return (g(d["To"]), g(d["Wo"]), g(d["p"]), g(d["U"]), g(d["Tsky"]), g(d["ho"]), g(d["rho"]),
+                g(d["Qo"]), g(d["Qc"]), g(d["sol"]))
+
+    def rhs_parts(self, t, y, N, on):
+        """Return (dy, details). details holds boundary/internal terms for diagnostics."""
+        n = self.n
+        h = y[self.i_h]
+        W = y[self.i_w]
+        Ts = y[self.i_T]
+        T = psychro.t_from_hw(h, W)
+        To, Wo, p, U, Tsky, ho, rho, Qo, Qc, sol = self._drivers(t)
+        dH = np.zeros(n)
+        dM = np.zeros(n)
+        brk = np.zeros((N_BRK, n))
+        # outdoor exchange
+        mo = rho * Qo
+        q_out = mo * (ho - h)
+        w_out = mo * (Wo - W)
+        dH += q_out
+        dM += w_out
+        brk[0] = q_out
+        # inter-section exchange (equal and opposite)
+        if len(self.conn_a):
+            mc = rho * Qc
+            dq = mc * (h[self.conn_b] - h[self.conn_a])
+            dw = mc * (W[self.conn_b] - W[self.conn_a])
+            qi = np.bincount(self.conn_a, dq, n) - np.bincount(self.conn_b, dq, n)
+            wi = np.bincount(self.conn_a, dw, n) - np.bincount(self.conn_b, dw, n)
+            dH += qi
+            dM += wi
+            brk[1] = qi
+        # surfaces
+        dTs = np.zeros(self.nn)
+        v_sec = np.maximum(self.still, self.lwf * U)
+        hin = self.conv_a + self.conv_b * v_sec[self.ic_sec]
+        qc = hin * self.ic_A * (Ts[self.ic_node] - T[self.ic_sec])
+        qsec = np.bincount(self.ic_sec, qc, n)
+        dH += qsec
+        brk[2] = qsec
+        dTs -= np.bincount(self.ic_node, qc, self.nn)
+        if len(self.cond):
+            i, j = self.cond[:, 0].astype(int), self.cond[:, 1].astype(int)
+            q = self.cond[:, 2] * (Ts[i] - Ts[j])
+            dTs -= np.bincount(i, q, self.nn)
+            dTs += np.bincount(j, q, self.nn)
+        TK = Ts + T0K
+        if len(self.pairs):
+            i, j = self.pairs[:, 0].astype(int), self.pairs[:, 1].astype(int)
+            q = self.pairs[:, 2] * (TK[i] ** 4 - TK[j] ** 4)
+            dTs -= np.bincount(i, q, self.nn)
+            dTs += np.bincount(j, q, self.nn)
+        en = self.env[:, 0].astype(int)
+        q_env = self.env[:, 1] * (TK[en] ** 4 - (Tsky + T0K) ** 4) + self.env[:, 2] * (TK[en] ** 4 - (To + T0K) ** 4)
+        dTs -= np.bincount(en, q_env, self.nn)
+        hex_ = self.conv_a + self.conv_b * U
+        q_ext = hex_ * self.ec_A * (Ts[self.ec_node] - To)
+        dTs -= np.bincount(self.ec_node, q_ext, self.nn)
+        gn = self.ground[:, 0].astype(int)
+        q_g = self.ground[:, 1] * (Ts[gn] - self.ground[:, 2])
+        dTs -= np.bincount(gn, q_g, self.nn)
+        dTs += sol
+        # occupants: total metabolic heat added once; latent part carried as vapour enthalpy
+        Qtot = N * self.met_W
+        fs = np.interp(T, self.fs_T, self.fs_f)
+        hv = psychro.h_vapour(T)
+        m_occ = Qtot * (1 - fs) / hv
+        dH += Qtot * fs + m_occ * hv
+        dM += m_occ
+        brk[3] = Qtot
+        # devices
+        evap = np.zeros(self.nd)
+        dev_bE = 0.0
+        dev_bW = 0.0
+        gross_dev = 0.0
+        if self.nd:
+            act = on
+            if np.any(act):
+                m = rho * self.d_air * act
+                h_in = np.where(self.d_out, ho, self.F @ h)
+                w_in = np.where(self.d_out, Wo, self.F @ W)
+                h_o, w_o, ev = outlet_state(h_in, w_in, p, self.d_evap & act, self.d_eff, self.d_heat * act,
+                                            np.where(act, m, 1.0))
+                ev = ev * act
+                Fm = self.F * m[:, None]
+                qd = (Fm * (h_o[:, None] - h[None, :])).sum(axis=0)
+                wd = (Fm * (w_o[:, None] - W[None, :])).sum(axis=0)
+                dH += qd
+                dM += wd
+                brk[4] = qd
+                evap = ev
+                # boundary part: outdoor-intake devices exchange with outdoors; recirculating ones only
+                # add their process enthalpy/water (their redistribution is internal and sums to zero)
+                rowq = (Fm * (h_o[:, None] - h[None, :])).sum(axis=1)
+                roww = (Fm * (w_o[:, None] - W[None, :])).sum(axis=1)
+                dev_bE = float(np.sum(np.where(self.d_out, rowq, m * (h_o - h_in))))
+                dev_bW = float(np.sum(np.where(self.d_out, roww, m * (w_o - w_in))))
+                gross_dev = float(np.sum(np.abs(Fm * (h_o[:, None] - h[None, :]))))
+        dh = dH / self.M
+        dw = dM / self.M
+        dT = dTs / self.C
+        bE = (q_out.sum() + Qtot.sum() + sol.sum() - q_env.sum() - q_ext.sum() - q_g.sum() + dev_bE)
+        bW = w_out.sum() + m_occ.sum() + dev_bW
+        gE = (np.abs(q_out).sum() + Qtot.sum() + sol.sum() + np.abs(q_env).sum() + np.abs(q_ext).sum()
+              + np.abs(q_g).sum() + abs(dev_bE) + gross_dev)
+        gW = np.abs(w_out).sum() + m_occ.sum() + abs(dev_bW)
+        dy = np.empty(self.ny)
+        dy[self.i_h] = dh
+        dy[self.i_w] = dw
+        dy[self.i_T] = dT
+        dy[self.i_acc:self.i_acc + 4] = (bE, bW, gE, gW)
+        dy[self.i_evap] = float(np.sum(evap))
+        dy[self.i_brk] = brk.ravel()
+        return dy, dict(T=T, To=To, Wo=Wo, p=p, U=U, Tsky=Tsky, rho=rho, Qo=Qo, Qc=Qc)
+
+    # ------------------------------------------------------------------ run
+    def initial_state(self):
+        To, Wo, p, *_ = self._drivers(self.ts)
+        ini = [s.initial for s in self.cfg.sections]
+        Tair = np.array([To if i.air == "outdoor" else i.air.value for i in ini])
+        W = np.array([Wo if i.humidity_ratio == "outdoor" else i.humidity_ratio.value for i in ini])
+        y = np.zeros(self.ny)
+        y[self.i_h] = psychro.enthalpy(Tair, W)
+        y[self.i_w] = W
+        Tn = []
+        for nd in self.node_info:
+            s = ini[nd["sec"]].surfaces
+            Tn.append(To if s == "outdoor_air" else s.value)
+        y[self.i_T] = np.array(Tn)
+        return y
+
+    def simulate(self) -> SimResult:
+        cfg = self.cfg
+        sim = cfg.simulation
+        t_start = _time.perf_counter()
+        y = self.initial_state()
+        step = sim.output_step_s
+        grid = np.arange(self.t0, self.t1 + 1e-6, step)
+        if abs(grid[-1] - self.t1) > 1e-6:
+            grid = np.append(grid, self.t1)
+        typ = np.concatenate([np.full(self.n, 1e5), np.full(self.n, 1e-2), np.full(self.nn, 1e2),
+                              [1e9, 1e3, 1e9, 1e3], [1e2], np.full(N_BRK * self.n, 1e9)])
+        atol = sim.atol_scale * typ
+        sparsity = np.zeros((self.ny, self.ny))
+        sparsity[:, :self.n_phys] = 1.0
+        outs_t, outs_y = [], []
+        n_rhs = [0]
+        msg = "ok"
+        ok = True
+        y_t0 = None
+        for (a, b, N, on) in self.segments:
+            def fun(t, yy, N=N, on=on):
+                n_rhs[0] += 1
+                return self.rhs_parts(t, yy, N, on)[0]
+            report = grid[(grid >= a - 1e-9) & (grid <= b + 1e-9)]
+            # solve_ivp returns only t_eval samples. If the segment end is not on the
+            # reporting grid, append it so the next segment starts from the true endpoint.
+            if len(report) == 0 or abs(float(report[-1]) - b) > 1e-6:
+                t_eval = np.append(report, b) if len(report) else np.array([b])
+            else:
+                t_eval = report
+            kw = dict(method=sim.method, rtol=sim.rtol, atol=atol, max_step=sim.max_step_s,
+                      t_eval=t_eval)
+            if sim.method in ("BDF", "Radau"):
+                kw["jac_sparsity"] = sparsity
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                sol = solve_ivp(fun, (a, b), y, **kw)
+            if not sol.success:
+                ok, msg = False, f"solver failed in segment {a/3600:.2f}-{b/3600:.2f} h: {sol.message}"
+                break
+            if abs(a - self.t0) < 1e-6:
+                y_t0 = y.copy()
+            for k in range(len(report)):
+                tt = float(sol.t[k])
+                if not outs_t or tt > outs_t[-1] + 1e-6:
+                    outs_t.append(tt)
+                    outs_y.append(sol.y[:, k].copy())
+            y = sol.y[:, -1].copy()
+            if not np.all(np.isfinite(y)):
+                ok, msg = False, f"non-finite state at {b/3600:.2f} h"
+                break
+        if y_t0 is None and outs_y:
+            y_t0 = outs_y[0]
+        runtime = _time.perf_counter() - t_start
+        if not ok or len(outs_t) < 2:
+            return self._failed(msg, runtime, n_rhs[0])
+        return self._postprocess(np.array(outs_t), np.array(outs_y), y_t0, runtime, n_rhs[0])
+
+    def _failed(self, msg, runtime, nrhs):
+        e = np.zeros((0, self.n))
+        return SimResult(False, msg, self.sec_ids, np.zeros(0), e, e, e, e, np.zeros((0, self.nn)), self.node_info,
+                         {}, {}, np.zeros((0, self.nd), bool), np.zeros((0, self.nd)), np.zeros((0, self.nd)),
+                         [], {}, {}, {}, np.zeros((0, self.n), bool), runtime, nrhs)
+
+    def _seg_at(self, t):
+        for a, b, N, on in self.segments:
+            if a <= t < b:
+                return N, on
+        return self.segments[-1][2], self.segments[-1][3]
+
+    def _postprocess(self, t, Y, y_t0, runtime, nrhs) -> SimResult:
+        n, nd = self.n, self.nd
+        h, W, Tn = Y[:, self.i_h], Y[:, self.i_w], Y[:, self.i_T]
+        T = psychro.t_from_hw(h, W)
+        drv = {k: np.interp(t, self.tg, self.drv[k]) for k in ("To", "Wo", "p", "U", "Tsky", "ghi", "dni", "dhi", "alt", "hour")}
+        fsun_e = np.stack([np.interp(t, self.tg, self.drv["fsun"][:, i]) for i in range(n)], axis=1)
+        drv["fsun"] = fsun_e
+        RH = psychro.rh_from_w(T, W, drv["p"][:, None])
+        # invalid states (flagged, never clipped)
+        val = psychro.state_validity(T, W, drv["p"][:, None])
+        node_bad = (Tn < -40) | (Tn > 95) | ~np.isfinite(Tn)
+        inv_mask = np.zeros_like(T, bool)
+        for v in val.values():
+            inv_mask |= v
+        invalid = {k: int(v.sum()) for k, v in val.items()}
+        invalid["surface_temperature_out_of_range"] = int(node_bad.sum())
+        if node_bad.any():
+            for j in range(self.nn):
+                inv_mask[:, self.node_info[j]["sec"]] |= node_bad[:, j]
+        # interval midpoints
+        tm = 0.5 * (t[:-1] + t[1:])
+        hm, Wm = 0.5 * (h[:-1] + h[1:]), 0.5 * (W[:-1] + W[1:])
+        Tnm = 0.5 * (Tn[:-1] + Tn[1:])
+        mid = {k: np.interp(tm, self.tg, self.drv[k]) for k in ("To", "Wo", "p", "U", "Tsky", "ghi", "dni", "dhi", "alt", "az", "hour")}
+        mid["fsun"] = np.stack([np.interp(tm, self.tg, self.drv["fsun"][:, i]) for i in range(n)], axis=1)
+        mid.update(t=tm, dt=np.diff(t), h=hm, W=Wm, T_air=psychro.t_from_hw(hm, Wm), T_nodes=Tnm,
+                   invalid=(inv_mask[:-1] | inv_mask[1:]))
+        mid["people"] = np.array([[self.occ.person_seconds(c, float(self._wrap(a)), float(self._wrap(a)) + (b - a)) / (b - a)
+                                   for c in self.occ_cols] for a, b in zip(t[:-1], t[1:])])
+        # device status and outlet states per interval
+        on = np.zeros((len(tm), nd), bool)
+        dh_o = np.zeros((len(tm), nd))
+        dw_o = np.zeros((len(tm), nd))
+        evap_rate = np.zeros((len(tm), nd))
+        for k, tt in enumerate(tm):
+            _, o = self._seg_at(tt)
+            on[k] = o
+            if nd:
+                rho = psychro.rho_da(mid["To"][k], mid["Wo"][k], mid["p"][k])
+                ho = psychro.enthalpy(mid["To"][k], mid["Wo"][k])
+                h_in = np.where(self.d_out, ho, self.F @ hm[k])
+                w_in = np.where(self.d_out, mid["Wo"][k], self.F @ Wm[k])
+                m = rho * self.d_air
+                ho_, wo_, ev_ = outlet_state(h_in, w_in, mid["p"][k], self.d_evap, self.d_eff, self.d_heat,
+                                             np.maximum(m, 1e-9))
+                dh_o[k], dw_o[k] = ho_, wo_
+                evap_rate[k] = ev_ * o
+        # ledgers over the reporting window
+        ledgers = []
+        acc0 = y_t0
+        acc1 = Y[-1]
+        evap_total_ode = float(acc1[self.i_evap] - acc0[self.i_evap])
+        evap_quad = (evap_rate * mid["dt"][:, None]).sum(axis=0) if nd else np.zeros(0)
+        q_sum = float(evap_quad.sum())
+        evap_ratio = evap_total_ode / q_sum if q_sum > 0 else 1.0
+        # per-device split from midpoint quadrature, reconciled to the integrated (ODE) total
+        evap_kg = evap_quad * evap_ratio
+        for d, dev in enumerate(self.devs):
+            on_s = 0.0
+            e_cost = 0.0
+            for a, b, N, o in self.segments:
+                if b <= self.t0 or a >= self.t1 or not o[d]:
+                    continue
+                dt = min(b, self.t1) - max(a, self.t0)
+                on_s += dt
+                hod = (float(self._wrap(0.5 * (a + b))) / 3600.0) % 24
+                price = self.cfg.tariffs.electricity.value
+                for tou in self.cfg.tariffs.time_of_use:
+                    if tou.start_h <= hod < tou.end_h:
+                        price = tou.price.value
+                e_cost += dev.power_W * dt / 3.6e6 * price
+            water_m3 = evap_kg[d] * (1 + dev.bleed) / 1000.0
+            ledgers.append(dict(device=dev.id, preset=dev.preset, kind=dev.kind, intake=dev.intake,
+                                schedule=dev.schedule_name,
+                                serves=";".join(f"{self.sec_ids[s]}:{f:.2f}" for s, f, _ in dev.serves),
+                                on_hours=on_s / 3600.0, electric_power_kW=dev.power_W / 1000.0,
+                                electricity_kWh=dev.power_W * on_s / 3.6e6, electricity_cost_usd=e_cost,
+                                evaporated_kg=float(evap_kg[d]), water_m3=float(water_m3),
+                                water_cost_usd=float(water_m3 * self.cfg.tariffs.water.value),
+                                capital_usd=dev.capital_usd, lifetime_y=dev.lifetime_y,
+                                maintenance_usd_y=dev.maintenance_usd_y))
+        brk = (acc1[self.i_brk] - acc0[self.i_brk]).reshape(N_BRK, n)
+        breakdown = {self.sec_ids[i]: {BREAKDOWN_NAMES[k]: float(brk[k, i]) for k in range(N_BRK)} for i in range(n)}
+        # conservation
+        def stored(yv):
+            return float(np.sum(self.M * yv[self.i_h]) + np.sum(self.C * yv[self.i_T]))
+
+        def water(yv):
+            return float(np.sum(self.M * yv[self.i_w]))
+        dE = stored(acc1) - stored(acc0)
+        bE = acc1[self.i_acc] - acc0[self.i_acc]
+        gE = acc1[self.i_acc + 2] - acc0[self.i_acc + 2]
+        dW_ = water(acc1) - water(acc0)
+        bW = acc1[self.i_acc + 1] - acc0[self.i_acc + 1]
+        gW = acc1[self.i_acc + 3] - acc0[self.i_acc + 3]
+        evap_total = evap_total_ode
+        # instantaneous algebraic check: internal transfers cancel exactly
+        inst = 0.0
+        for k in range(0, len(t), max(1, len(t) // 48)):
+            N, o = self._seg_at(min(t[k], self.t1 - 1e-6))
+            dy, _ = self.rhs_parts(t[k], Y[k], N, o)
+            lhs = np.sum(self.M * dy[self.i_h]) + np.sum(self.C * dy[self.i_T])
+            inst = max(inst, abs(lhs - dy[self.i_acc]) / max(dy[self.i_acc + 2], 1.0))
+        # dry-air balance per section (in minus out) from the flow structure
+        dry = 0.0
+        for k in range(0, len(tm), max(1, len(tm) // 48)):
+            rho = psychro.rho_da(mid["To"][k], mid["Wo"][k], mid["p"][k])
+            ko = int(np.clip(np.searchsorted(self.tg, tm[k]), 0, len(self.tg) - 1))
+            m_o = rho * self.drv["Qo"][ko]
+            m_c = rho * self.drv["Qc"][ko]
+            m_dev = rho * self.d_air * on[k]
+            inflow = m_o + np.bincount(self.conn_a, m_c, n) + np.bincount(self.conn_b, m_c, n) \
+                + (self.F * m_dev[:, None]).sum(axis=0)
+            # leaving: to outdoors (exchange), to neighbours, and displaced/drawn by devices
+            outflow = m_o.copy() + np.bincount(self.conn_a, m_c, n) + np.bincount(self.conn_b, m_c, n)
+            for d in range(nd):
+                outflow += self.F[d] * m_dev[d]
+            dry = max(dry, float(np.max(np.abs(inflow - outflow))) if n else 0.0)
+        cons = dict(energy_residual_J=dE - bE, energy_gross_J=gE,
+                    energy_residual_rel=(dE - bE) / max(gE, 1.0),
+                    water_residual_kg=dW_ - bW, water_gross_kg=gW, water_residual_rel=(dW_ - bW) / max(gW, 1e-9),
+                    internal_cancellation_rel_max=inst, dry_air_imbalance_kg_s=dry,
+                    device_evaporated_kg=evap_total, evaporation_ode_to_quadrature_ratio=evap_ratio,
+                    stored_energy_change_J=dE)
+        return SimResult(True, "ok", self.sec_ids, t, h, W, T, RH, Tn, self.node_info, drv, mid, on, dh_o, dw_o,
+                         ledgers, breakdown, cons, invalid, inv_mask, runtime, nrhs)
+
+
+===== FILE: venuecool/runner.py =====
+"""Scenario execution, matched baseline comparisons and exports."""
+
+from __future__ import annotations
+
+import copy
+import json
+import math
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+
+from . import comfort, metrics
+from .config import (VenueConfig, apply_passive, expand_templates, load_raw, set_path, VenueConfig as _VC)
+from .inputs import load_occupancy, load_weather, read_meta
+from .model import Model
+
+
+@dataclass
+class Outcome:
+    label: str
+    device_ids: List[str]
+    passive: List[str]
+    cfg: VenueConfig
+    model: Model
+    sim: object
+    comfort_df: Optional[pd.DataFrame]
+    summary: Optional[dict]
+    costs: Optional[dict]
+
+    @property
+    def ok(self):
+        return bool(self.sim.ok)
+
+
+class Study:
+    """Holds an expanded raw configuration and the shared weather/occupancy inputs."""
+
+    def __init__(self, config, weather_file: Optional[str] = None, occupancy_file: Optional[str] = None,
+                 sim_overrides: Optional[dict] = None):
+        raw = load_raw(config) if isinstance(config, (str, Path)) else copy.deepcopy(config)
+        if weather_file:
+            raw["weather"]["file"] = str(Path(weather_file).resolve())
+        if occupancy_file:
+            raw["occupancy"]["file"] = str(Path(occupancy_file).resolve())
+        for k, v in (sim_overrides or {}).items():
+            raw.setdefault("simulation", {})[k] = v
+        raw = expand_templates(raw)
+        wpath = Path(raw["weather"]["file"])
+        if not wpath.is_absolute():
+            wpath = Path(raw.get("base_dir", ".")) / wpath
+        self.site_source = "configuration"
+        if wpath.exists():
+            meta = read_meta(wpath)
+            keys = ("latitude_deg", "longitude_deg", "utc_offset_h", "day_of_year")
+            if all(k in meta for k in keys):
+                raw["site"] = {k: (int(float(meta[k])) if k == "day_of_year" else float(meta[k])) for k in keys}
+                self.site_source = f"weather file metadata ({wpath.name})"
+        self.raw = raw
+        self.cfg0 = _VC.model_validate(self.raw)
+        self.weather = load_weather(self.cfg0.path(self.cfg0.weather.file), self.cfg0.site, self.cfg0.weather.solar_split)
+        cols = sorted({s.occupancy.column or s.id for s in self.cfg0.sections})
+        self.occupancy = load_occupancy(self.cfg0.path(self.cfg0.occupancy.file), cols)
+
+    # ------------------------------------------------------------------
+    def raw_for(self, passive=(), draw: Optional[Dict[str, float]] = None, extra_devices=None, sim_overrides=None):
+        r = copy.deepcopy(self.raw)
+        for path, val in (draw or {}).items():
+            set_path(r, path, val)
+        opts = {p["id"]: p for p in r.get("passive_options", [])}
+        for pid in passive:
+            apply_passive(r, opts[pid])
+        if extra_devices:
+            r["devices"] = list(r.get("devices", [])) + copy.deepcopy(extra_devices)
+        for k, v in (sim_overrides or {}).items():
+            r["simulation"][k] = v
+        return r
+
+    def run(self, device_ids=(), passive=(), draw=None, extra_devices=None, label="custom",
+            sim_overrides=None, evaluate=True) -> Outcome:
+        cfg = _VC.model_validate(self.raw_for(passive, draw, extra_devices, sim_overrides))
+        model = Model(cfg, self.weather, self.occupancy, list(device_ids))
+        sim = model.simulate()
+        if not sim.ok or not evaluate:
+            return Outcome(label, list(device_ids), list(passive), cfg, model, sim, None, None, None)
+        df = comfort.evaluate(cfg, model, sim)
+        summ = metrics.summarize(df, cfg)
+        window_days = (cfg.simulation.end_h - cfg.simulation.start_h) / 24.0
+        popts = [p for p in cfg.passive_options if p.id in passive]
+        costs = metrics.ledger_totals(sim.ledgers, popts, cfg, window_days)
+        return Outcome(label, list(device_ids), list(passive), cfg, model, sim, df, summ, costs)
+
+    def scenario_ids(self):
+        return [s.id for s in self.cfg0.scenarios]
+
+    def run_scenario(self, sid, draw=None, sim_overrides=None) -> Outcome:
+        if sid == "baseline" and "baseline" not in self.scenario_ids():
+            return self.run([], [], draw, label="baseline", sim_overrides=sim_overrides)
+        sc = next(s for s in self.cfg0.scenarios if s.id == sid)
+        return self.run(sc.devices, sc.passive, draw, label=sid, sim_overrides=sim_overrides)
+
+    def compare_all(self, scenarios=None, draw=None, sim_overrides=None):
+        ids = scenarios or [s for s in self.scenario_ids() if s != "baseline"]
+        base = self.run_scenario("baseline", draw, sim_overrides)
+        outs = {"baseline": base}
+        comps = {}
+        for sid in ids:
+            o = self.run_scenario(sid, draw, sim_overrides)
+            outs[sid] = o
+            if base.ok and o.ok:
+                comps[sid] = metrics.compare(base.summary, o.summary, base.costs, o.costs)
+        return outs, comps
+
+
+# ---------------------------------------------------------------------- reporting
+def provenance_table(raw) -> pd.DataFrame:
+    rows = []
+
+    def walk(node, path):
+        if isinstance(node, dict):
+            if {"value", "unit", "source"} <= set(node):
+                rows.append(dict(path=path, value=node["value"], unit=node["unit"], source=node["source"],
+                                 bounds=json.dumps(node.get("bounds"))))
+                return
+            for k, v in node.items():
+                if k != "templates":
+                    walk(v, f"{path}.{k}" if path else k)
+        elif isinstance(node, list):
+            for x in node:
+                if isinstance(x, dict) and "id" in x:
+                    walk(x, f"{path}[{x['id']}]")
+    walk(raw, "")
+    return pd.DataFrame(rows)
+
+
+def _clean(o):
+    if isinstance(o, dict):
+        return {k: _clean(v) for k, v in o.items() if not k.startswith("_")}
+    if isinstance(o, (list, tuple)):
+        return [_clean(v) for v in o]
+    if isinstance(o, (np.floating, float)):
+        f = float(o)
+        return None if math.isnan(f) or math.isinf(f) else f
+    if isinstance(o, (np.integer,)):
+        return int(o)
+    if isinstance(o, np.bool_):
+        return bool(o)
+    return o
+
+
+def cumulative_electricity_kWh(o: Outcome) -> np.ndarray:
+    """Cumulative electricity [kWh] at each output sample time (midpoint quadrature of on × power)."""
+    s = o.sim
+    n_t = len(s.t)
+    cum = np.zeros(n_t)
+    if s.device_on.size == 0 or not o.model.devs:
+        return cum
+    powers_kW = np.array([d.power_W for d in o.model.devs], float) / 1000.0
+    # device_on / mid["dt"] align with intervals between consecutive output times
+    dt_h = np.diff(s.t) / 3600.0
+    n_int = min(len(dt_h), s.device_on.shape[0])
+    rate = (s.device_on[:n_int].astype(float) * powers_kW[None, :]).sum(axis=1)  # kW
+    incr = rate * dt_h[:n_int]  # kWh
+    cum[1:n_int + 1] = np.cumsum(incr)
+    if n_int + 1 < n_t:
+        cum[n_int + 1:] = cum[n_int]
+    return cum
+
+
+def timeseries_frame(o: Outcome) -> pd.DataFrame:
+    s = o.sim
+    cum_kwh = cumulative_electricity_kWh(o)
+    rows = []
+    for i, sid in enumerate(s.section_ids):
+        rows.append(pd.DataFrame(dict(scenario=o.label, t_h=s.t / 3600, section=sid, T_air_C=s.T_air[:, i],
+                                      RH_pct=s.RH[:, i] * 100, W_kg_kg=s.W[:, i], T_out_C=s.drivers["To"],
+                                      RH_out_pct=None, wind_ms=s.drivers["U"], sun_fraction=s.drivers["fsun"][:, i],
+                                      floor_surface_C=s.T_nodes[:, o.model.floor_node[i]],
+                                      roof_underside_C=(s.T_nodes[:, o.model.roof_node[i]] if i in o.model.roof_node else np.nan),
+                                      electricity_kWh_cum=cum_kwh,
+                                      invalid_state=s.invalid_mask[:, i])))
+    df = pd.concat(rows, ignore_index=True)
+    from .psychro import rh_from_w
+    df["RH_out_pct"] = np.tile(rh_from_w(s.drivers["To"], s.drivers["Wo"], s.drivers["p"]) * 100, len(s.section_ids))
+    return df
+
+
+def comparison_rows(outs, comps) -> pd.DataFrame:
+    rows = []
+    for sid, o in outs.items():
+        if not o.ok:
+            rows.append(dict(scenario=sid, status="SOLVER_FAILED: " + o.sim.message))
+            continue
+        v = o.summary["venue"]
+        c = comps.get(sid, {})
+        rows.append(dict(
+            scenario=sid, status="ok", devices=";".join(o.device_ids), passive=";".join(o.passive),
+            occupied_person_hours=v["occupied_person_hours"], assessed_person_hours=v["assessed_person_hours"],
+            unassessed_person_hours=v["unassessed_person_hours"], extrapolated_person_hours=v["extrapolated_person_hours"],
+            served_person_hours=v["served_person_hours"], burden_Kph=v["burden_Kph"], attainment=v["attainment"],
+            relief_Kph=c.get("relief_Kph", 0.0 if sid == "baseline" else np.nan),
+            residual_matched_Kph=c.get("residual_burden_matched_Kph", np.nan),
+            electricity_kWh=o.costs["electricity_kWh"], water_m3=o.costs["water_m3"],
+            investment_usd=o.costs["investment_usd"], season_total_cost_usd=o.costs["season_total_cost_usd"],
+            relief_per_kWh=c.get("relief_per_kWh", np.nan), relief_per_usd=c.get("relief_per_usd", np.nan),
+            poorly_served=";".join(o.summary["poorly_served"]),
+            worsened_sections=";".join(c.get("worsened_sections", [])),
+            energy_residual_rel=o.sim.conservation["energy_residual_rel"],
+            water_residual_rel=o.sim.conservation["water_residual_rel"],
+            invalid_states=sum(o.sim.invalid.values()), runtime_s=o.sim.runtime_s))
+    return pd.DataFrame(rows)
+
+
+def export(outs, comps, study: Study, outdir) -> Path:
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    cfg = study.cfg0
+    comparison_rows(outs, comps).to_csv(outdir / "comparison.csv", index=False)
+    ts, cf, led, brk = [], [], [], []
+    summary = dict(venue=cfg.meta.name, data_status=cfg.meta.data_status, description=cfg.meta.description,
+                   notes=cfg.meta.notes, weather_file=str(cfg.path(cfg.weather.file)),
+                   weather_metadata=study.weather.meta, occupancy_metadata=study.occupancy.meta,
+                   comfort_index=cfg.comfort.index, target_C=cfg.comfort.target.value,
+                   decision_basis=cfg.comfort.decision_basis,
+                   horizon=dict(simulated_hours=cfg.simulation.end_h - cfg.simulation.start_h,
+                                season_days=cfg.tariffs.season_days.value, note=cfg.tariffs.horizon_note),
+                   disclaimer=("Modeled comfort burden (SET-based) for comparing configurations; not a measured "
+                               "satisfaction rate and not a medical heat-safety guarantee. Person-hours are not visitors."),
+                   scenarios={})
+    for sid, o in outs.items():
+        if not o.ok:
+            summary["scenarios"][sid] = dict(status="SOLVER_FAILED", message=o.sim.message)
+            continue
+        ts.append(timeseries_frame(o))
+        cf.append(o.comfort_df.assign(scenario=sid))
+        led += [dict(scenario=sid, **x) for x in o.sim.ledgers]
+        for sec, d in o.sim.breakdown_J.items():
+            brk.append(dict(scenario=sid, section=sec, **{k + "_kWh": v / 3.6e6 for k, v in d.items()}))
+        summary["scenarios"][sid] = dict(
+            devices=o.device_ids, passive=o.passive, metrics=o.summary, costs=o.costs, ledgers=o.sim.ledgers,
+            conservation=o.sim.conservation, invalid_states=o.sim.invalid, runtime_s=o.sim.runtime_s,
+            rhs_evaluations=o.sim.n_rhs, comparison=comps.get(sid))
+    pd.concat(ts).to_csv(outdir / "timeseries.csv", index=False)
+    pd.concat(cf).to_csv(outdir / "comfort_populations.csv", index=False)
+    pd.DataFrame(led).to_csv(outdir / "device_ledgers.csv", index=False)
+    pd.DataFrame(brk).to_csv(outdir / "enthalpy_flow_breakdown.csv", index=False)
+    provenance_table(study.raw).to_csv(outdir / "provenance.csv", index=False)
+    (outdir / "summary.json").write_text(json.dumps(_clean(summary), indent=2))
+    return outdir
+
+
+===== FILE: venuecool/plots.py =====
+"""Batch Plotly report figures for the single-zone Problem B slice.
+
+Writes standalone HTML files (no Streamlit). Cumulative kWh comes from the timeseries export.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Dict, Optional
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+
+ORDER = ["baseline", "A_fan", "B_evap", "C_large_evap"]
+COLORS = {
+    "baseline": "#4C566A",
+    "A_fan": "#5E81AC",
+    "B_evap": "#A3BE8C",
+    "C_large_evap": "#BF616A",
+}
+
+
+def _scenario_order(df: pd.DataFrame, col: str = "scenario") -> pd.DataFrame:
+    cats = [s for s in ORDER if s in set(df[col])]
+    extra = [s for s in df[col].unique() if s not in cats]
+    out = df.copy()
+    out[col] = pd.Categorical(out[col], categories=cats + extra, ordered=True)
+    return out.sort_values([col, "t_h"] if "t_h" in out.columns else [col])
+
+
+def people_weighted_set(comfort: pd.DataFrame) -> pd.DataFrame:
+    """People-weighted mean equivalent temperature (SET) per scenario and time."""
+    df = comfort.copy()
+    if "et" not in df.columns:
+        df["et"] = df["set_extended"] if "set_extended" in df.columns else df["set_strict"]
+    rows = []
+    for (sc, t), g in df.groupby(["scenario", "t_h"], sort=True):
+        w = g["people"].to_numpy(float)
+        et = g["et"].to_numpy(float)
+        m = np.isfinite(et) & np.isfinite(w) & (w >= 0)
+        if not m.any() or w[m].sum() <= 0:
+            val = float("nan")
+        else:
+            val = float((et[m] * w[m]).sum() / w[m].sum())
+        rows.append(dict(scenario=sc, t_h=t, SET_C=val, people=float(w[m].sum()) if m.any() else 0.0))
+    return pd.DataFrame(rows)
+
+
+def write_report(outdir, timeseries: pd.DataFrame, comfort: pd.DataFrame,
+                 comparison: Optional[pd.DataFrame] = None) -> Dict[str, Path]:
+    """Write the four Problem B report figures. Returns {name: path}."""
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    ts = _scenario_order(timeseries)
+    air = (ts.groupby(["scenario", "t_h"], as_index=False)
+             .agg(T_air_C=("T_air_C", "mean"), RH_pct=("RH_pct", "mean"),
+                  T_out_C=("T_out_C", "mean"), electricity_kWh_cum=("electricity_kWh_cum", "max")))
+    air = _scenario_order(air)
+
+    paths: Dict[str, Path] = {}
+
+    fig = go.Figure()
+    for sc in air["scenario"].cat.categories:
+        g = air[air["scenario"] == sc]
+        fig.add_trace(go.Scatter(x=g["t_h"], y=g["T_air_C"], mode="lines", name=str(sc),
+                                 line=dict(color=COLORS.get(str(sc)))))
+    base = air[air["scenario"] == air["scenario"].cat.categories[0]]
+    fig.add_trace(go.Scatter(x=base["t_h"], y=base["T_out_C"], mode="lines", name="outdoor",
+                             line=dict(color="#D08770", dash="dash")))
+    fig.update_layout(title="Shelter air temperature (24 h synthetic day)",
+                      xaxis_title="Hour of day", yaxis_title="Air temperature [C]",
+                      template="plotly_white", legend_title="Scenario")
+    p = outdir / "air_temperature.html"
+    fig.write_html(str(p), include_plotlyjs="cdn")
+    paths["air_temperature"] = p
+
+    fig = px.line(air, x="t_h", y="RH_pct", color="scenario",
+                  color_discrete_map=COLORS,
+                  title="Shelter relative humidity",
+                  labels={"t_h": "Hour of day", "RH_pct": "Relative humidity [%]", "scenario": "Scenario"})
+    fig.update_layout(template="plotly_white")
+    p = outdir / "relative_humidity.html"
+    fig.write_html(str(p), include_plotlyjs="cdn")
+    paths["relative_humidity"] = p
+
+    set_df = _scenario_order(people_weighted_set(comfort))
+    fig = px.line(set_df, x="t_h", y="SET_C", color="scenario",
+                  color_discrete_map=COLORS,
+                  title="People-weighted mean SET (thermal comfort index)",
+                  labels={"t_h": "Hour of day", "SET_C": "SET [C]", "scenario": "Scenario"})
+    fig.update_layout(template="plotly_white")
+    p = outdir / "thermal_comfort.html"
+    fig.write_html(str(p), include_plotlyjs="cdn")
+    paths["thermal_comfort"] = p
+
+    fig = px.line(air, x="t_h", y="electricity_kWh_cum", color="scenario",
+                  color_discrete_map=COLORS,
+                  title="Cumulative electricity use",
+                  labels={"t_h": "Hour of day", "electricity_kWh_cum": "Cumulative electricity [kWh]",
+                          "scenario": "Scenario"})
+    fig.update_layout(template="plotly_white")
+    p = outdir / "cumulative_kWh.html"
+    fig.write_html(str(p), include_plotlyjs="cdn")
+    paths["cumulative_kWh"] = p
+
+    if comparison is not None and len(comparison):
+        comparison.to_csv(outdir / "comparison.csv", index=False)
+    return paths
+
+
+def write_robustness_figures(outdir, table: pd.DataFrame) -> Dict[str, Path]:
+    """Figures for whether the preferred cooler changes under plausible assumptions."""
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    paths: Dict[str, Path] = {}
+    winners = (table[table["preferred"]]
+               .drop_duplicates(["case", "target_C"])
+               [["case", "target_C", "preferred_scenario", "relief_Kph"]])
+    cases = list(dict.fromkeys(winners["case"]))
+    targets = list(dict.fromkeys(winners["target_C"]))
+    z, text = [], []
+    lookup = {(r.case, r.target_C): r for r in winners.itertuples()}
+    for case in cases:
+        z.append([lookup[(case, t)].relief_Kph for t in targets])
+        text.append([lookup[(case, t)].preferred_scenario for t in targets])
+    fig = go.Figure(data=go.Heatmap(
+        z=z, x=[str(t) for t in targets], y=cases, text=text, texttemplate="%{text}",
+        colorbar=dict(title="Relief"), colorscale="YlGnBu", hovertemplate="case %{y}<br>target %{x} C<br>%{text}<extra></extra>"))
+    fig.update_layout(title="Preferred cooling system by assumption and SET target",
+                      xaxis_title="SET target [C]", yaxis_title="Assumption", template="plotly_white")
+    p = outdir / "preferred_system.html"
+    fig.write_html(str(p), include_plotlyjs="cdn")
+    paths["preferred_system"] = p
+
+    sub = table[(table["scenario"] != "baseline") & (table["target_C"] == 30.0)]
+    fig = px.bar(sub, x="case", y="relief_Kph", color="scenario", barmode="group",
+                 color_discrete_map=COLORS,
+                 title="Relief at a 30 C SET target",
+                 labels={"relief_Kph": "Relief [K person-h]", "case": "Assumption", "scenario": "System"})
+    fig.update_layout(template="plotly_white")
+    p = outdir / "relief_by_assumption.html"
+    fig.write_html(str(p), include_plotlyjs="cdn")
+    paths["relief_by_assumption"] = p
+
+    nom = table[(table["case"] == table["case"].iloc[0]) & (table["target_C"] == table["target_C"].iloc[0])]
+    fig = go.Figure()
+    fig.add_bar(name="supported", x=nom["scenario"], y=nom["supported_person_hours"])
+    fig.add_bar(name="extrapolated", x=nom["scenario"], y=nom["extrapolated_person_hours"])
+    fig.update_layout(barmode="stack", template="plotly_white",
+                      title="Supported vs extrapolated person-hours (first case; independent of SET target)",
+                      yaxis_title="Person-hours", xaxis_title="Scenario")
+    p = outdir / "supported_vs_extrapolated.html"
+    fig.write_html(str(p), include_plotlyjs="cdn")
+    paths["supported_vs_extrapolated"] = p
+    return paths
+
+
+===== FILE: venuecool/robustness.py =====
+"""Sensitivity of the single-zone bus shelter to a few labelled assumptions.
+
+Each case is a full re-simulation (outdoor airflow, solar opening, device coverage). Comfort
+targets of 28, 30 and 32 C SET are applied afterwards to the same comfort trajectories, so
+supported vs extrapolated person-hours — which depend on the SET input envelope, not the
+target — are identical across targets.
+
+Preferred system: the intervention with the largest matched relief. Baseline is preferred
+when every intervention has relief <= 0.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pandas as pd
+
+from . import metrics
+from .plots import write_robustness_figures
+
+SCENARIOS = ["A_fan", "B_evap", "C_large_evap"]
+TARGETS = (28.0, 30.0, 32.0)
+
+
+def assumption_cases():
+    """Nominal values and the documented bounds in examples/common (DEMO-ASSUMPTIONS)."""
+    return [
+        ("nominal", {}),
+        ("airflow_low", {
+            "sections[shelter].outdoor.wind_coefficient.value": 0.04,
+            "sections[shelter].outdoor.min_flow.value": 0.2,
+        }),
+        ("airflow_high", {
+            "sections[shelter].outdoor.wind_coefficient.value": 0.20,
+            "sections[shelter].outdoor.min_flow.value": 1.0,
+        }),
+        ("solar_low", {"sections[shelter].sun.open_side_fraction.value": 0.3}),
+        ("solar_high", {"sections[shelter].sun.open_side_fraction.value": 0.7}),
+        ("coverage_low", {
+            "device_presets.fan_system.covered_air_speed.value": 0.8,
+            "device_presets.evaporative_cooler.plume_fraction.value": 0.10,
+            "device_presets.evaporative_cooler.covered_air_speed.value": 0.6,
+            "device_presets.large_evaporative_cooler.plume_fraction.value": 0.15,
+            "device_presets.large_evaporative_cooler.covered_air_speed.value": 0.8,
+        }),
+        ("coverage_high", {
+            "device_presets.fan_system.covered_air_speed.value": 1.8,
+            "device_presets.evaporative_cooler.plume_fraction.value": 0.45,
+            "device_presets.evaporative_cooler.covered_air_speed.value": 1.5,
+            "device_presets.large_evaporative_cooler.plume_fraction.value": 0.55,
+            "device_presets.large_evaporative_cooler.covered_air_speed.value": 1.8,
+        }),
+    ]
+
+
+def _row(case, target, scenario, summary, relief, costs, preferred):
+    v = summary["venue"]
+    return dict(
+        case=case, target_C=target, scenario=scenario,
+        relief_Kph=relief, burden_Kph=v["burden_Kph"], attainment=v["attainment"],
+        supported_person_hours=v["supported_person_hours"],
+        extrapolated_person_hours=v["extrapolated_person_hours"],
+        assessed_person_hours=v["assessed_person_hours"],
+        unassessed_person_hours=v["unassessed_person_hours"],
+        electricity_kWh=costs["electricity_kWh"],
+        preferred=preferred, preferred_scenario="")
+
+
+def preferred_scenario(relief_by_scenario: dict) -> str:
+    best = max(relief_by_scenario, key=lambda s: (relief_by_scenario[s],))
+    if relief_by_scenario[best] <= 0:
+        return "baseline"
+    return best
+
+
+def run_robustness(study, outdir, cases=None, targets=None, scenarios=None) -> pd.DataFrame:
+    cases = cases if cases is not None else assumption_cases()
+    targets = tuple(targets) if targets is not None else TARGETS
+    scenarios = scenarios or SCENARIOS
+    rows = []
+    for name, draw in cases:
+        outs, _comps = study.compare_all(scenarios, draw=draw)
+        base = outs["baseline"]
+        for tgt in targets:
+            base_sum = metrics.summarize(base.comfort_df, base.cfg, target=tgt)
+            relief = {}
+            packed = []
+            for sid, o in outs.items():
+                summary = base_sum if sid == "baseline" else metrics.summarize(o.comfort_df, o.cfg, target=tgt)
+                if sid == "baseline":
+                    rel = 0.0
+                else:
+                    rel = metrics.compare(base_sum, summary, base.costs, o.costs)["relief_Kph"]
+                    relief[sid] = rel
+                packed.append((sid, summary, rel, o.costs))
+            winner = preferred_scenario(relief)
+            for sid, summary, rel, costs in packed:
+                rec = _row(name, tgt, sid, summary, rel, costs, sid == winner)
+                rec["preferred_scenario"] = winner
+                rows.append(rec)
+    df = pd.DataFrame(rows)
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    df.to_csv(outdir / "robustness_results.csv", index=False)
+    winners = (df[df["preferred"]]
+               .groupby(["case", "target_C"], as_index=False)["preferred_scenario"].first())
+    changed = int(winners["preferred_scenario"].nunique() > 1)
+    summary = dict(
+        definition="preferred = intervention with the largest matched relief; baseline if all relief <= 0",
+        targets_C=list(targets),
+        preferred_changes=bool(changed),
+        winners=winners.to_dict(orient="records"),
+        note=("supported_person_hours and extrapolated_person_hours do not depend on the SET target. "
+              "They count comfort evaluations inside strict ASHRAE 55 input limits vs the declared "
+              "extended envelope. Weather and occupancy remain SYNTHETIC_DEMONSTRATION."))
+    (outdir / "robustness_summary.json").write_text(json.dumps(summary, indent=2))
+    write_robustness_figures(outdir, df)
+    return df
+
+
+===== FILE: venuecool/cli.py =====
+"""Command-line interface for batch simulations.
+
+    venuecool validate   CONFIG
+    venuecool compare    CONFIG [--weather CSV] [--scenarios a,b] [--out DIR]
+    venuecool search     CONFIG [--workers N] [--limit N] [--out DIR]
+    venuecool uncertainty CONFIG [--samples N] [--seed S] [--workers N] [--out DIR]
+    venuecool sweep      CONFIG --scenario ID [--workers N]
+    venuecool benchmark  CONFIG [--runs N] [--workers 1,4,11]
+    venuecool calibrate  CONFIG [--out DIR]
+    venuecool refine     CONFIG [--scenario ID]
+    venuecool report     CONFIG [--weather CSV] [--scenarios a,b] [--out DIR]
+    venuecool robust     CONFIG [--weather CSV] [--out DIR]
+    venuecool examples   [--out DIR]          # every example x both synthetic climates
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parent.parent
+EXAMPLES = ROOT / "examples"
+CLIMATES = {"hot_dry": EXAMPLES / "data" / "weather_hot_dry.csv",
+            "warm_humid": EXAMPLES / "data" / "weather_warm_humid.csv"}
+EXAMPLE_CONFIGS = ["bus_stop.yaml", "rail_station.yaml", "venue3.yaml"]
+
+
+def _study(args):
+    from .runner import Study
+    return Study(args.config, weather_file=getattr(args, "weather", None))
+
+
+def _default_out(args, kind):
+    if getattr(args, "out", None):
+        return Path(args.out)
+    wfile = getattr(args, "weather", None)
+    if not wfile:
+        from .config import load_raw
+        wfile = load_raw(args.config)["weather"]["file"]
+    w = Path(wfile).stem.replace("weather_", "")
+    return ROOT / "outputs" / Path(args.config).stem / w / kind
+
+
+def cmd_validate(args):
+    from .runner import Study
+    s = Study(args.config, weather_file=args.weather)
+    c = s.cfg0
+    print(f"OK  {c.meta.name}  [{c.meta.data_status}]")
+    print(f"  sections: {[x.id for x in c.sections]}  connections: {[x.id for x in c.connections]}")
+    print(f"  devices: {[d.id for d in c.devices]}  scenarios: {[x.id for x in c.scenarios]}")
+    print(f"  weather: {c.weather.file} status={s.weather.meta.get('data_status')}  site from {s.site_source}")
+    from .config import find_uncertain
+    print(f"  uncertain parameters (with bounds): {len(find_uncertain(s.raw))}")
+
+
+def cmd_compare(args):
+    from .runner import comparison_rows, export
+    s = _study(args)
+    scen = args.scenarios.split(",") if args.scenarios else None
+    t = time.perf_counter()
+    outs, comps = s.compare_all(scen)
+    out = export(outs, comps, s, _default_out(args, "compare"))
+    df = comparison_rows(outs, comps)
+    cols = ["scenario", "attainment", "burden_Kph", "relief_Kph", "electricity_kWh", "water_m3",
+            "season_total_cost_usd", "relief_per_kWh", "relief_per_usd", "poorly_served", "worsened_sections"]
+    with pd.option_context("display.width", 200, "display.max_columns", 20):
+        print(df[[c for c in cols if c in df]].round(3).to_string(index=False))
+    print(f"[{s.cfg0.meta.data_status}] wrote {out}  ({time.perf_counter() - t:.1f} s)")
+
+
+def cmd_report(args):
+    """Run the four Problem B scenarios and write Tair / RH / SET / cumulative-kWh graphs."""
+    from .plots import write_report
+    from .runner import comparison_rows, export
+    s = _study(args)
+    scen = args.scenarios.split(",") if args.scenarios else ["A_fan", "B_evap", "C_large_evap"]
+    t = time.perf_counter()
+    outs, comps = s.compare_all(scen)
+    report_override = args.out
+    args.out = None  # CSVs stay under the standard compare/ folder
+    compare_dir = _default_out(args, "compare")
+    export(outs, comps, s, compare_dir)
+    df = comparison_rows(outs, comps)
+    args.out = report_override
+    report_dir = Path(report_override) if report_override else _default_out(args, "report")
+    # reuse exported frames so graphs match the CSV archive
+    ts = pd.read_csv(compare_dir / "timeseries.csv")
+    cf = pd.read_csv(compare_dir / "comfort_populations.csv")
+    paths = write_report(report_dir, ts, cf, df)
+    cols = ["scenario", "attainment", "burden_Kph", "relief_Kph", "electricity_kWh", "water_m3"]
+    with pd.option_context("display.width", 200, "display.max_columns", 20):
+        print(df[[c for c in cols if c in df]].round(3).to_string(index=False))
+    print(f"[{s.cfg0.meta.data_status}] compare -> {compare_dir}")
+    print(f"report graphs -> {report_dir}")
+    for name, p in paths.items():
+        print(f"  {name}: {p}")
+    print(f"({time.perf_counter() - t:.1f} s)")
+
+
+def cmd_robust(args):
+    """Re-simulate the single-zone shelter under airflow, solar and coverage assumptions."""
+    from .robustness import run_robustness
+    s = _study(args)
+    out = _default_out(args, "robustness")
+    df = run_robustness(s, out)
+    winners = df[df["preferred"]][["case", "target_C", "preferred_scenario", "relief_Kph",
+                                   "supported_person_hours", "extrapolated_person_hours"]]
+    with pd.option_context("display.width", 200, "display.max_columns", 20):
+        print(winners.round(3).to_string(index=False))
+    print(f"preferred system changes across the table: {df.loc[df.preferred, 'preferred_scenario'].nunique() > 1}")
+    print(f"wrote {out}")
+
+
+def cmd_search(args):
+    from .search import run_search
+    s = _study(args)
+    r = run_search(s, _default_out(args, "search"), workers=args.workers, limit=args.limit)
+    print(json.dumps({k: r[k] for k in ("n_candidates", "workers", "wall_s", "mean_candidate_s", "status_counts")}, indent=1))
+    if r["selected"] is None:
+        print(r["message"])
+    else:
+        sel = r["selected"]
+        print(f"SELECTED: {sel['label']}  kWh/day={sel['electricity_kWh']:.2f}  season cost=${sel['season_total_cost_usd']:.0f}"
+              f"  attainment={sel['attainment']:.3f}")
+        print("verification:", r.get("verification"))
+
+
+def cmd_uncertainty(args):
+    from .uncertainty import run_uncertainty
+    s = _study(args)
+    r = run_uncertainty(s, _default_out(args, "uncertainty"), samples=args.samples, seed=args.seed, workers=args.workers)
+    print(f"{r['samples']} draws in {r['wall_s']:.1f} s with {r['workers']} workers")
+    for k, v in r["outputs"].items():
+        if k.endswith("relief_Kph"):
+            print(f"  {k}: mean {v['mean']:.1f}  5-95% [{v['p05']:.1f}, {v['p95']:.1f}]  P(relief<0)={v['prob_negative']:.2f}")
+    print(f"  rank correlations with |rho| <= {r['spearman_noise_level']:.2f} are within sampling noise")
+    for sid, lst in r["sensitivity"].items():
+        sig = [d for d in lst if d["above_noise"]][:4]
+        print(f"  drivers of relief for {sid}: " +
+              (", ".join(f"{d['parameter']} ({d['spearman_rho']:+.2f})" for d in sig) or "none above noise"))
+
+
+def cmd_sweep(args):
+    from .uncertainty import oat_sweep
+    s = _study(args)
+    rows = oat_sweep(s, args.scenario, _default_out(args, "sweep"), workers=args.workers)
+    for r in rows[:12]:
+        print(f"{r['parameter']:<75s} low {r['relief_low']:.1f}  high {r['relief_high']:.1f}  (nominal {r['relief_nominal']:.1f})")
+
+
+def cmd_benchmark(args):
+    from .runner import Study
+    from .search import enumerate_configs
+    s = _study(args)
+    ids = [x for x in s.scenario_ids() if x != "baseline"][:1] or ["baseline"]
+    ts = []
+    for _ in range(args.runs):
+        t = time.perf_counter()
+        o = s.run_scenario(ids[0])
+        ts.append((time.perf_counter() - t, o.sim.runtime_s))
+    per = sum(x[0] for x in ts) / len(ts)
+    ode = sum(x[1] for x in ts) / len(ts)
+    print(f"serial: {per:.2f} s per scenario run (ODE {ode:.2f} s, rest = comfort/metrics), {args.runs} runs")
+    res = {"serial_s_per_run": per, "ode_s_per_run": ode, "parallel": {}}
+    if s.cfg0.search:
+        n = len(enumerate_configs(s.cfg0))
+        res["search_candidates"] = n
+    for w in [int(x) for x in args.workers.split(",")]:
+        if w <= 1:
+            continue
+        from concurrent.futures import ProcessPoolExecutor
+        from . import uncertainty as U
+        jobs = [(i, {}, ids) for i in range(w * 2)]
+        t = time.perf_counter()
+        with ProcessPoolExecutor(max_workers=w, initializer=U._init, initargs=(s.raw,)) as ex:
+            list(ex.map(U._work, jobs))
+        wall = time.perf_counter() - t
+        thr = len(jobs) * 2 / wall  # each job = baseline + one scenario
+        res["parallel"][w] = dict(wall_s=wall, runs=len(jobs) * 2, runs_per_s=thr)
+        print(f"{w} workers: {len(jobs) * 2} runs in {wall:.1f} s (incl. worker start-up) -> {thr:.2f} runs/s")
+    if "search_candidates" in res:
+        best = max([v["runs_per_s"] for v in res["parallel"].values()] + [1 / per])
+        print(f"estimated full search ({res['search_candidates']} candidates): {res['search_candidates'] / best / 60:.1f} min "
+              f"at the best measured throughput")
+    out = _default_out(args, "benchmark")
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "benchmark.json").write_text(json.dumps(res, indent=2))
+
+
+def cmd_calibrate(args):
+    from .calibrate import preset_checks, simulated_checks
+    s = _study(args)
+    out = _default_out(args, "calibrate")
+    out.mkdir(parents=True, exist_ok=True)
+    pc = pd.DataFrame(preset_checks(s.cfg0))
+    pc.to_csv(out / "preset_reference_checks.csv", index=False)
+    outs, _ = s.compare_all()
+    sc = pd.DataFrame(simulated_checks(s, outs))
+    sc.to_csv(out / "simulated_claim_checks.csv", index=False)
+    with pd.option_context("display.width", 220, "display.max_columns", 30):
+        print(pc.drop(columns=["claim", "note"]).round(2).to_string(index=False))
+        print(sc.drop(columns=["claim"]).round(2).to_string(index=False))
+    print(f"wrote {out}")
+
+
+def cmd_refine(args):
+    """Numerical refinement: tolerance and output-step halving must not change the metrics materially."""
+    from .runner import Study
+    from . import metrics
+    rows = []
+    for rtol, step in [(1e-4, 600.0), (1e-6, 300.0), (1e-8, 150.0), (1e-9, 60.0)]:
+        s = Study(args.config, weather_file=args.weather, sim_overrides=dict(rtol=rtol, output_step_s=step))
+        b = s.run_scenario("baseline")
+        o = s.run_scenario(args.scenario) if args.scenario else b
+        c = metrics.compare(b.summary, o.summary, b.costs, o.costs)
+        rows.append(dict(rtol=rtol, output_step_s=step, baseline_burden=b.summary["venue"]["burden_Kph"],
+                         relief=c["relief_Kph"], attainment=o.summary["venue"]["attainment"],
+                         peak_T_air=float(o.sim.T_air.max()), energy_residual_rel=o.sim.conservation["energy_residual_rel"],
+                         ode_s=o.sim.runtime_s))
+    df = pd.DataFrame(rows)
+    print(df.to_string(index=False))
+    out = _default_out(args, "refine")
+    out.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out / "refinement.csv", index=False)
+
+
+def cmd_examples(args):
+    from .runner import Study, comparison_rows, export
+    root = Path(args.out) if args.out else ROOT / "outputs"
+    allrows = []
+    for cfgname in EXAMPLE_CONFIGS:
+        for clim, wf in CLIMATES.items():
+            t = time.perf_counter()
+            s = Study(EXAMPLES / cfgname, weather_file=str(wf))
+            outs, comps = s.compare_all()
+            od = export(outs, comps, s, root / Path(cfgname).stem / clim / "compare")
+            df = comparison_rows(outs, comps).assign(example=Path(cfgname).stem, climate=clim)
+            allrows.append(df)
+            print(f"{cfgname:<20s} {clim:<11s} {len(outs)} runs in {time.perf_counter() - t:5.1f} s -> {od}")
+    big = pd.concat(allrows, ignore_index=True)
+    big.to_csv(root / "examples_overview.csv", index=False)
+    cols = ["example", "climate", "scenario", "attainment", "relief_Kph", "electricity_kWh", "water_m3",
+            "season_total_cost_usd", "relief_per_kWh", "poorly_served"]
+    with pd.option_context("display.width", 220, "display.max_columns", 20):
+        print(big[cols].round(3).to_string(index=False))
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="venuecool", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    def add(name, fn, config=True):
+        sp = sub.add_parser(name)
+        if config:
+            sp.add_argument("config")
+            sp.add_argument("--weather", default=None, help="override weather CSV")
+        sp.add_argument("--out", default=None)
+        sp.set_defaults(fn=fn)
+        return sp
+    add("validate", cmd_validate)
+    sp = add("compare", cmd_compare)
+    sp.add_argument("--scenarios", default=None)
+    sp = add("report", cmd_report)
+    sp.add_argument("--scenarios", default=None,
+                    help="comma-separated interventions (baseline always included); "
+                         "default A_fan,B_evap,C_large_evap")
+    add("robust", cmd_robust)
+    sp = add("search", cmd_search)
+    sp.add_argument("--workers", type=int, default=None)
+    sp.add_argument("--limit", type=int, default=None)
+    sp = add("uncertainty", cmd_uncertainty)
+    sp.add_argument("--samples", type=int, default=None)
+    sp.add_argument("--seed", type=int, default=None)
+    sp.add_argument("--workers", type=int, default=None)
+    sp = add("sweep", cmd_sweep)
+    sp.add_argument("--scenario", required=True)
+    sp.add_argument("--workers", type=int, default=None)
+    sp = add("benchmark", cmd_benchmark)
+    sp.add_argument("--runs", type=int, default=3)
+    sp.add_argument("--workers", default=f"1,{max(1, (os.cpu_count() or 2) - 1)}")
+    add("calibrate", cmd_calibrate)
+    sp = add("refine", cmd_refine)
+    sp.add_argument("--scenario", default=None)
+    add("examples", cmd_examples, config=False)
+    args = p.parse_args(argv)
+    try:
+        args.fn(args)
+    except Exception as e:  # noqa: BLE001
+        from .inputs import InputDataError
+        if isinstance(e, (InputDataError, ValueError, KeyError)):
+            print(f"ERROR: {type(e).__name__}: {e}", file=sys.stderr)
+            return 2
+        raise
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
+
+===== FILE: tests/test_single_zone_problem_b.py =====
+"""Focused checks for the single-zone HiMCM Problem B bus-shelter slice.
+
+Reuses the existing psychro / fan / wet-bulb suite; this file only covers the one-section
+example, the four Problem B scenarios, and cumulative-energy bookkeeping.
+"""
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from venuecool import metrics, psychro
+from venuecool.quantity import Quantity
+from venuecool.runner import Study, cumulative_electricity_kWh, timeseries_frame
+
+ROOT = Path(__file__).resolve().parent.parent
+CFG = ROOT / "examples" / "bus_shelter_single.yaml"
+
+
+@pytest.fixture(scope="module")
+def study():
+    return Study(CFG)
+
+
+@pytest.fixture(scope="module")
+def runs(study):
+    base = study.run_scenario("baseline")
+    fan = study.run_scenario("A_fan")
+    evap = study.run_scenario("B_evap")
+    large = study.run_scenario("C_large_evap")
+    assert all(o.ok for o in (base, fan, evap, large))
+    return dict(baseline=base, A_fan=fan, B_evap=evap, C_large_evap=large)
+
+
+def test_single_zone_config_shape(study):
+    cfg = study.cfg0
+    assert len(cfg.sections) == 1
+    assert cfg.sections[0].id == "shelter"
+    assert cfg.connections == []
+    assert {s.id for s in cfg.scenarios} == {"baseline", "A_fan", "B_evap", "C_large_evap"}
+    assert study.weather.meta.get("data_status", "").startswith("SYNTHETIC")
+    assert Quantity(value=0.25, unit="kW", source="t").to("W").value == pytest.approx(250.0)
+    assert cfg.device_presets["fan_system"].electric_power.to("W").value == pytest.approx(250.0)
+    assert cfg.device_presets["evaporative_cooler"].electric_power.to("W").value == pytest.approx(1200.0)
+    assert cfg.device_presets["large_evaporative_cooler"].electric_power.to("W").value == pytest.approx(2500.0)
+
+
+def test_fan_raises_speed_without_cooling_air(runs):
+    base, fan = runs["baseline"], runs["A_fan"]
+    # no artificial refrigeration: mean section air is not colder than baseline
+    assert fan.sim.T_air.mean() >= base.sim.T_air.mean() - 1e-6
+    on = fan.sim.device_on[:, 0]
+    assert on.any()
+    # covered occupants see higher air speed than the matched baseline population
+    bf = base.comfort_df
+    ff = fan.comfort_df
+    assert ff.loc[ff.served, "v"].mean() > bf["v"].mean()
+    led = fan.sim.ledgers[0]
+    assert led["electricity_kWh"] == pytest.approx(0.25 * led["on_hours"], rel=1e-9)
+    cum = cumulative_electricity_kWh(fan)
+    assert cum[-1] == pytest.approx(led["electricity_kWh"], rel=1e-3, abs=1e-3)
+
+
+def test_evaporative_cools_and_humidifies_within_wet_bulb(runs):
+    base, evap = runs["baseline"], runs["B_evap"]
+    on = evap.sim.device_on[:, 0]
+    assert on.any()
+    assert np.all(evap.sim.mid["T_air"][on, 0] < base.sim.mid["T_air"][on, 0])
+    # RH rises while the cooler runs (moisture added to dry synthetic air)
+    assert evap.sim.RH[1:][on].mean() > base.sim.RH[1:][on].mean()
+    t_wb = psychro.wet_bulb(evap.sim.mid["To"][on], evap.sim.mid["Wo"][on], evap.sim.mid["p"][on])
+    t_out = psychro.t_from_hw(evap.sim.device_outlet_h[on, 0], evap.sim.device_outlet_W[on, 0])
+    assert np.all(t_out >= t_wb - 1e-6)
+    led = evap.sim.ledgers[0]
+    assert led["electricity_kWh"] == pytest.approx(1.2 * led["on_hours"], rel=1e-9)
+
+
+def test_large_cooler_uses_more_energy_and_gives_more_relief(runs):
+    base, b, c = runs["baseline"], runs["B_evap"], runs["C_large_evap"]
+    assert c.costs["electricity_kWh"] > b.costs["electricity_kWh"]
+    cb = metrics.compare(base.summary, b.summary, base.costs, b.costs)
+    cc = metrics.compare(base.summary, c.summary, base.costs, c.costs)
+    assert cc["relief_Kph"] > cb["relief_Kph"]
+
+
+def test_set_target_changes_burden_not_applicability(runs):
+    from venuecool import metrics
+    base = runs["baseline"]
+    low = metrics.summarize(base.comfort_df, base.cfg, target=28.0)
+    high = metrics.summarize(base.comfort_df, base.cfg, target=32.0)
+    assert low["venue"]["burden_Kph"] > high["venue"]["burden_Kph"]
+    assert low["venue"]["supported_person_hours"] == pytest.approx(high["venue"]["supported_person_hours"])
+    assert low["venue"]["extrapolated_person_hours"] == pytest.approx(high["venue"]["extrapolated_person_hours"])
+
+
+def test_preferred_system_rule():
+    from venuecool.robustness import preferred_scenario
+    assert preferred_scenario({"A_fan": 10.0, "B_evap": 40.0, "C_large_evap": 30.0}) == "B_evap"
+    assert preferred_scenario({"A_fan": -1.0, "B_evap": 0.0}) == "baseline"
+
+
+def test_timeseries_includes_cumulative_kwh(runs):
+    df = timeseries_frame(runs["A_fan"])
+    assert "electricity_kWh_cum" in df.columns
+    assert df["electricity_kWh_cum"].iloc[0] == pytest.approx(0.0)
+    assert df["electricity_kWh_cum"].iloc[-1] > 0
+
+
+===== FILE: tests/test_psychro_devices.py =====
+"""Physics checks: psychrometrics and evaporative / fan device thermodynamics."""
+
+import numpy as np
+import pytest
+
+from venuecool import psychro
+from venuecool.constants import CP_W
+from venuecool.devices import evaporative_pad, outlet_state
+
+
+def test_saturation_pressure_reference_values():
+    # ASHRAE Fundamentals 2017 Table 3: 20 C -> 2.3392 kPa, 30 C -> 4.2467 kPa, -10 C (ice) -> 0.2601 kPa
+    assert psychro.p_ws(20.0) == pytest.approx(2339.2, rel=1e-3)
+    assert psychro.p_ws(30.0) == pytest.approx(4246.7, rel=1e-3)
+    assert psychro.p_ws(-10.0) == pytest.approx(260.1, rel=2e-3)
+
+
+def test_state_roundtrips():
+    t = np.array([10.0, 25.0, 41.0])
+    w = psychro.w_from_rh(t, np.array([0.9, 0.5, 0.1]))
+    np.testing.assert_allclose(psychro.rh_from_w(t, w), [0.9, 0.5, 0.1], rtol=1e-12)
+    h = psychro.enthalpy(t, w)
+    np.testing.assert_allclose(psychro.t_from_hw(h, w), t, rtol=1e-12)
+
+
+def test_wet_bulb_reference_and_consistency():
+    # 30 C / 50% RH at sea level: wet bulb ~ 22.0 C (psychrometric chart)
+    w = psychro.w_from_rh(30.0, 0.5)
+    assert psychro.wet_bulb(30.0, w) == pytest.approx(22.0, abs=0.15)
+    t = np.array([25.0, 33.0, 41.0])
+    w = psychro.w_from_rh(t, np.array([0.7, 0.6, 0.1]))
+    np.testing.assert_allclose(psychro.wet_bulb_fast(t, w), psychro.wet_bulb(t, w), atol=1e-4)
+
+
+def test_supersaturation_is_flagged_not_clipped():
+    w = 1.2 * psychro.w_sat(30.0)
+    assert psychro.rh_from_w(30.0, w) > 1.0
+    flags = psychro.state_validity(np.array([30.0]), np.array([w]))
+    assert flags["supersaturated"][0]
+    assert psychro.state_validity(np.array([30.0]), np.array([-1e-3]))["negative_humidity"][0]
+
+
+@pytest.mark.parametrize("t,rh", [(41.0, 0.11), (33.0, 0.6), (28.0, 0.85)])
+def test_evaporative_pad_respects_wet_bulb_and_energy(t, rh):
+    w = psychro.w_from_rh(t, rh)
+    for eff in (0.0, 0.5, 0.8, 1.0):
+        t_pad, w_pad, t_wb = evaporative_pad(np.array([t]), np.array([w]), 101325.0, eff, fast=False)
+        assert t_pad[0] >= t_wb[0] - 1e-9
+        assert t_pad[0] == pytest.approx(t - eff * (t - t_wb[0]))
+        assert w_pad[0] >= w - 1e-15
+        assert psychro.rh_from_w(t_pad[0], w_pad[0]) <= 1.0 + 1e-6
+        # pad energy balance: h_out = h_in + (W_out - W_in) * h_liquid(T_water = T_wb)
+        lhs = psychro.enthalpy(t_pad[0], w_pad[0])
+        rhs = psychro.enthalpy(t, w) + (w_pad[0] - w) * CP_W * t_wb[0]
+        assert lhs == pytest.approx(rhs, rel=1e-12)
+    # eff = 1 reaches saturation at the wet bulb
+    t_pad, w_pad, t_wb = evaporative_pad(np.array([t]), np.array([w]), 101325.0, 1.0, fast=False)
+    assert psychro.rh_from_w(t_pad[0], w_pad[0]) == pytest.approx(1.0, abs=1e-4)
+
+
+def test_evaporative_cooling_weaker_in_humid_air():
+    dry = 41.0 - evaporative_pad(np.array([41.0]), psychro.w_from_rh(np.array([41.0]), 0.11), 101325.0, 0.75)[0][0]
+    humid = 33.0 - evaporative_pad(np.array([33.0]), psychro.w_from_rh(np.array([33.0]), 0.6), 101325.0, 0.75)[0][0]
+    assert dry > 2.5 * humid > 0
+
+
+def test_fan_outlet_adds_only_motor_heat():
+    h = psychro.enthalpy(35.0, 0.01)
+    h_o, w_o, ev = outlet_state(np.array([h]), np.array([0.01]), 101325.0, np.array([False]), np.array([0.0]),
+                                np.array([250.0]), np.array([2.0]))
+    assert h_o[0] - h == pytest.approx(125.0)  # 250 W / 2 kg/s
+    assert w_o[0] == 0.01 and ev[0] == 0.0
+    assert psychro.t_from_hw(h_o, w_o)[0] > 35.0  # never colder: no refrigeration term
+
+
+===== FILE: tests/test_model_physics.py =====
+"""Coupled-model checks: conservation, mixing, fans, evaporative coolers, shared devices,
+energy units, baseline equivalence, occupancy aggregation and numerical refinement.
+
+These are software/physics consistency checks, NOT validation against measurements.
+"""
+
+import numpy as np
+import pytest
+
+from conftest import q, sealed, study_with
+from venuecool import metrics
+
+
+def test_conservation_residuals_small(mini_study):
+    for sid in ("baseline", "fan", "evap", "shared"):
+        o = mini_study.run_scenario(sid)
+        c = o.sim.conservation
+        assert o.ok
+        assert abs(c["energy_residual_rel"]) < 1e-9
+        assert abs(c["water_residual_rel"]) < 1e-9
+        assert c["internal_cancellation_rel_max"] < 1e-10  # internal transfers equal and opposite
+        assert c["dry_air_imbalance_kg_s"] == 0.0
+        assert sum(o.sim.invalid.values()) == 0
+
+
+def test_conservative_mixing_between_sealed_sections(mini_raw):
+    def mut(r):
+        sealed(r)
+        r["sections"][0]["initial"] = {"humidity_ratio": q(0.004, "kg/kg")}
+        r["sections"][1]["initial"] = {"humidity_ratio": q(0.016, "kg/kg")}
+    s = study_with(mini_raw, mut)
+    o = s.run_scenario("baseline")
+    M = o.model.M
+    total = (o.sim.W * M).sum(axis=1)
+    # warm-up already mixed the sections; total moisture stays constant over the reporting window
+    np.testing.assert_allclose(total, total[0], rtol=1e-8)
+    assert np.max(np.abs(o.sim.W[:, 0] - o.sim.W[:, 1])) < 1e-6
+    # mixed humidity ratio is the dry-air-mass-weighted mean of the initial values
+    assert o.sim.W[-1, 0] == pytest.approx((0.004 * M[0] + 0.016 * M[1]) / M.sum(), rel=1e-6)
+
+
+def test_fan_raises_air_speed_not_outdoor_exchange(mini_study, mini_base):
+    o = mini_study.run_scenario("fan")
+    # no refrigeration: section air never colder than baseline
+    assert np.all(o.sim.T_air[:, 0] >= mini_base.sim.T_air[:, 0] - 1e-6)
+    # outdoor exchange flow structure identical (recirculating fan adds no outside air)
+    np.testing.assert_allclose(o.model.drv["Qo"], mini_base.model.drv["Qo"])
+    # the only added enthalpy is motor heat: devices term = P * on_time
+    on_s = o.sim.ledgers[0]["on_hours"] * 3600
+    assert o.sim.breakdown_J["A"]["devices"] == pytest.approx(250.0 * on_s, rel=1e-6)
+    c = o.comfort_df
+    cov = c[(c.section == "A") & (c.group == "covered") & c.served]
+    unc = c[(c.section == "A") & (c.group == "open")]
+    assert cov.v.min() > unc.v.max() - 1e-9
+    assert not c[(c.section == "A") & (c.group == "open")].served.any()
+
+
+def test_table_airflow_provider_reproduces_parametric(tmp_path, mini_raw, mini_study, mini_base):
+    import pandas as pd
+    from venuecool.airflow import ParametricAirflow
+    from venuecool.inputs import InputDataError
+    cfg = mini_study.cfg0
+    u = np.array([0.0, 30.0])  # flows are linear in wind, so two rows interpolate exactly
+    qo, qc = ParametricAirflow(cfg).flows(u)
+    df = pd.DataFrame({"wind_ms": u, **{f"out:{s.id}": qo[:, i] for i, s in enumerate(cfg.sections)},
+                       **{f"conn:{c.id}": qc[:, j] for j, c in enumerate(cfg.connections)}})
+    df.to_csv(tmp_path / "flows.csv", index=False)
+    spec = {"provider": "table", "file": str(tmp_path / "flows.csv"), "source": "test copy of parametric flows"}
+    o = study_with(mini_raw, lambda r: r.__setitem__("airflow", spec)).run_scenario("baseline")
+    np.testing.assert_allclose(o.sim.T_air, mini_base.sim.T_air, rtol=1e-9, atol=1e-9)
+    df.drop(columns=[f"out:{cfg.sections[0].id}"]).to_csv(tmp_path / "bad.csv", index=False)
+    with pytest.raises(InputDataError, match="missing columns"):
+        study_with(mini_raw, lambda r: r.__setitem__("airflow", {**spec, "file": str(tmp_path / "bad.csv")})
+                   ).run_scenario("baseline")
+
+
+def test_energy_units_fan_one_hour_is_quarter_kwh(mini_raw):
+    s = study_with(mini_raw, lambda r: None)
+    o = s.run(["fan_hour"], label="fan_hour")
+    led = o.sim.ledgers[0]
+    assert led["on_hours"] == pytest.approx(1.0)
+    assert led["electricity_kWh"] == pytest.approx(0.25)  # 0.25 kW for 1 h
+    assert o.costs["electricity_kWh"] == pytest.approx(0.25)
+    assert o.costs["installed_kW"] == pytest.approx(0.25)  # power (kW) kept separate from energy (kWh)
+
+
+def test_evaporative_water_ledger_matches_moisture_added(mini_study, mini_base):
+    o = mini_study.run_scenario("evap")
+    led = o.sim.ledgers[0]
+    assert led["evaporated_kg"] > 0
+    assert led["water_m3"] == pytest.approx(led["evaporated_kg"] * 1.15 / 1000)  # bleed 15%
+    # total boundary water = baseline-like terms + device evaporation, checked by residual
+    assert abs(o.sim.conservation["water_residual_rel"]) < 1e-9
+    on = o.sim.device_on[:, 0]
+    tA = o.sim.mid["T_air"][:, 0]
+    assert np.all(tA[on] < mini_base.sim.mid["T_air"][on, 0])
+    from venuecool import psychro
+    t_wb = psychro.wet_bulb(o.sim.mid["To"][on], o.sim.mid["Wo"][on], o.sim.mid["p"][on])
+    t_out = psychro.t_from_hw(o.sim.device_outlet_h[on, 0], o.sim.device_outlet_W[on, 0])
+    assert np.all(t_out >= t_wb - 1e-6)  # wet-bulb limit (motor heat only raises it)
+
+
+def test_recirculating_cooler_in_sealed_room_humidifies_and_weakens(mini_raw):
+    def mut(r):
+        sealed(r, zero_people=True)
+    s = study_with(mini_raw, mut)
+    rec = s.run(["evap_rec"], label="rec")
+    out = s.run(["evap_out"], label="out")
+    on = rec.sim.device_on[:, 0]
+    assert rec.sim.mid["W"][on, 0].max() > out.sim.mid["W"][on, 0].max()
+    # outdoor-intake unit creates through-flow; recirculating unit does not exchange outdoor air
+    assert out.sim.breakdown_J["A"]["devices"] != rec.sim.breakdown_J["A"]["devices"]
+
+
+def test_shared_device_counted_once(mini_study, mini_base):
+    o = mini_study.run_scenario("shared")
+    assert len(o.sim.ledgers) == 1
+    led = o.sim.ledgers[0]
+    assert led["electricity_kWh"] == pytest.approx(2.5 * led["on_hours"])
+    assert led["serves"] == "A:0.60;B:0.40"
+    # both served sections are cooler while the unit runs (direct evaporative cooling is ~isenthalpic,
+    # so the sign of the delivered enthalpy is not a cooling indicator)
+    on = o.sim.device_on[:, 0]
+    for i in (0, 1):
+        assert np.all(o.sim.mid["T_air"][on, i] < mini_base.sim.mid["T_air"][on, i])
+    assert abs(o.sim.conservation["evaporation_ode_to_quadrature_ratio"] - 1) < 0.01
+    v = o.summary["venue"]
+    assert v["served_person_hours"] <= v["occupied_person_hours"] + 1e-9
+
+
+def test_overlapping_devices_do_not_double_count_beneficiaries(mini_study):
+    o = mini_study.run(["evap_rec", "evap_rec2"], label="two_on_same_group")
+    one = mini_study.run(["evap_rec"], label="one")
+    assert o.summary["venue"]["served_person_hours"] == pytest.approx(one.summary["venue"]["served_person_hours"])
+    assert o.costs["electricity_kWh"] == pytest.approx(2 * one.costs["electricity_kWh"])
+
+
+def test_baseline_equivalence(mini_study, mini_base):
+    again = mini_study.run_scenario("baseline")
+    np.testing.assert_array_equal(again.sim.T_air, mini_base.sim.T_air)
+    never = mini_study.run(["fan_never"], label="never")
+    c = metrics.compare(mini_base.summary, never.summary, mini_base.costs, never.costs)
+    assert c["relief_Kph"] == pytest.approx(0.0, abs=1e-9)
+    assert c["incremental_kWh"] == 0.0
+    np.testing.assert_allclose(never.sim.T_air, mini_base.sim.T_air, rtol=1e-12)
+
+
+def test_negative_relief_is_preserved(mini_study, mini_base):
+    # a "fan" whose only effect is heat (covers no occupied group): must give relief <= 0
+    o = mini_study.run(["fan1"], label="fan")
+    c = metrics.compare(mini_base.summary, o.summary, mini_base.costs, o.costs)
+    sec_b = c["sections"]["B"]["relief_Kph"]
+    assert sec_b <= 1e-9  # B only receives the fan's motor heat through the connection
+    assert c["relief_Kph"] == pytest.approx(sum(v["relief_Kph"] for v in c["sections"].values()))
+
+
+def test_occupancy_aggregation(mini_study, mini_base):
+    v = mini_base.summary["venue"]
+    # A: 10 people x 10 h, B: 4 people x 4 h within the 24 h window -> 116 person-hours
+    assert v["occupied_person_hours"] == pytest.approx(116.0, rel=1e-9)
+    s = mini_base.summary["sections"]
+    assert s["A"]["occupied_person_hours"] == pytest.approx(100.0)
+    assert s["B"]["occupied_person_hours"] == pytest.approx(16.0)
+    df = mini_base.comfort_df
+    assert df.person_hours.sum() == pytest.approx(116.0)  # groups x sun states partition people exactly
+    assert v["assessed_person_hours"] + v["unassessed_person_hours"] == pytest.approx(116.0)
+
+
+def test_ratios_formed_after_summing(mini_study, mini_base):
+    o = mini_study.run_scenario("shared")
+    c = metrics.compare(mini_base.summary, o.summary, mini_base.costs, o.costs)
+    assert c["relief_per_kWh"] == pytest.approx(c["relief_Kph"] / c["incremental_kWh"])
+
+
+def test_offgrid_schedule_matches_fine_grid(mini_raw):
+    """A schedule edge that is not on the reporting grid must still hand the true endpoint onward."""
+    def prepare(r, step):
+        r["simulation"]["warmup_days"] = 0
+        r["simulation"]["end_h"] = 2
+        r["simulation"]["output_step_s"] = step
+        r["simulation"]["rtol"] = 1e-7
+        r["schedules"]["offgrid"] = {"mode": "hours", "intervals": [[0.0, 0.35]]}
+        for d in r["devices"]:
+            if d["id"] == "evap_out":
+                d["schedule"] = "offgrid"
+    coarse = study_with(mini_raw, lambda r: prepare(r, 600.0)).run(["evap_out"], label="coarse")
+    fine = study_with(mini_raw, lambda r: prepare(r, 60.0)).run(["evap_out"], label="fine")
+    assert 1260.0 not in set(np.round(coarse.sim.t, 5))
+    assert any(abs(t - 1260.0) < 1e-6 for t in fine.sim.t)
+
+    def air_at(sim, t):
+        i = int(np.argmin(np.abs(sim.t - t)))
+        assert abs(sim.t[i] - t) < 1.0
+        return sim.T_air[i, 0]
+    # 1800 s and 3600 s lie on both grids, after the 1260 s switch
+    assert air_at(coarse.sim, 1800) == pytest.approx(air_at(fine.sim, 1800), abs=0.15)
+    assert air_at(coarse.sim, 3600) == pytest.approx(air_at(fine.sim, 3600), abs=0.15)
+    # reporting grid itself stays on the requested step
+    assert np.all(np.diff(coarse.sim.t) == pytest.approx(600.0))
+
+
+def test_numerical_refinement(mini_raw):
+    from venuecool.runner import Study
+    res = {}
+    for rtol, step in [(1e-5, 600.0), (1e-8, 150.0)]:
+        s = Study(mini_raw, sim_overrides=dict(rtol=rtol, output_step_s=step))
+        b = s.run_scenario("baseline")
+        e = s.run_scenario("evap")
+        res[rtol] = (b.summary["venue"]["burden_Kph"], metrics.compare(b.summary, e.summary, b.costs, e.costs)["relief_Kph"],
+                     b.sim.T_air.max())
+    (b1, r1, t1), (b2, r2, t2) = res[1e-5], res[1e-8]
+    assert b1 == pytest.approx(b2, rel=0.01)
+    assert r1 == pytest.approx(r2, rel=0.01)
+    assert t1 == pytest.approx(t2, abs=0.02)
+
+
+def test_warmup_reaches_periodic_state(mini_raw):
+    from venuecool.runner import Study
+    s = Study(mini_raw, sim_overrides=dict(warmup_days=3))
+    o = s.run_scenario("baseline")
+    # constant-forcing day repeated: start and end of the reporting day nearly coincide
+    np.testing.assert_allclose(o.sim.T_nodes[0], o.sim.T_nodes[-1], atol=0.3)
+
+
+def test_search_reports_statuses_and_no_feasible(tmp_path, mini_raw):
+    from venuecool.runner import Study
+    from venuecool.search import run_search
+    s = Study(mini_raw)
+    r = run_search(s, tmp_path, workers=1, progress=lambda *a: None)
+    assert r["n_candidates"] == 3 and sum(r["status_counts"].values()) == 3
+    assert (tmp_path / "search_results.csv").exists()
+    raw2 = dict(mini_raw)
+    raw2["search"] = dict(mini_raw["search"], target={"min_attainment": 1.0, "max_unassessed_fraction": 0.0})
+    r2 = run_search(Study(raw2), tmp_path / "b", workers=1, verify=False, progress=lambda *a: None)
+    assert r2["selected"] is None and "NO TESTED CONFIGURATION" in r2["message"]
+
+
+def test_matched_uncertainty_draws(mini_study):
+    from venuecool.uncertainty import lhs_draws, uncertain_parameters
+    params = uncertain_parameters(mini_study)
+    d1 = lhs_draws(params, 4, 7)
+    d2 = lhs_draws(params, 4, 7)
+    assert d1 == d2  # seeded
+    for path, qd in params:
+        lo, hi = qd["bounds"]
+        assert all(lo <= d[path] <= hi for d in d1)
+
+
+===== FILE: tests/test_units_config_inputs.py =====
+"""Software checks: units, provenance, configuration validation, input-data handling."""
+
+import copy
+
+import numpy as np
+import pytest
+from pydantic import ValidationError
+
+from conftest import MINI, q
+from venuecool.config import VenueConfig, expand_templates, find_uncertain, load_raw, set_path
+from venuecool.inputs import InputDataError, load_weather
+from venuecool.quantity import Quantity
+
+
+def test_unit_conversion_and_rejection():
+    assert Quantity(value=0.25, unit="kW", source="x").to("W").value == pytest.approx(250.0)
+    assert Quantity(value=3600, unit="m3/h", source="x").to("m3/s").value == pytest.approx(1.0)
+    assert Quantity(value=50, unit="%", source="x").to("-").value == pytest.approx(0.5)
+    with pytest.raises(ValueError):
+        Quantity(value=1, unit="kWh", source="x").to("W")  # energy is not power
+    with pytest.raises(ValidationError):
+        Quantity(value=1, unit="W", source="  ")  # provenance required
+    with pytest.raises(ValidationError):
+        Quantity(value=5, unit="W", source="x", bounds=(0, 1))  # nominal outside bounds
+
+
+def test_schema_rejects_wrong_units_and_unknown_fields(mini_raw):
+    r = copy.deepcopy(mini_raw)
+    r["device_presets"]["fan_system"]["electric_power"] = q(0.25, "kWh")
+    with pytest.raises(ValidationError, match="kWh"):
+        VenueConfig.model_validate(r)
+    r = copy.deepcopy(mini_raw)
+    r["sections"][0]["roof_colour"] = "white"
+    with pytest.raises(ValidationError):
+        VenueConfig.model_validate(r)
+
+
+def test_device_airflow_fractions_must_reconcile(mini_raw):
+    r = copy.deepcopy(mini_raw)
+    dev = next(d for d in r["devices"] if d["id"] == "shared")
+    dev["serves"][1]["airflow_fraction"] = 0.6  # 0.6 + 0.6
+    with pytest.raises(ValidationError, match="reconcile"):
+        VenueConfig.model_validate(r)
+    r = copy.deepcopy(mini_raw)
+    r["devices"].append(copy.deepcopy(r["devices"][0]))
+    with pytest.raises(ValidationError, match="duplicate device"):
+        VenueConfig.model_validate(r)
+
+
+def test_template_sections_keep_their_own_identity(mini_raw):
+    r = copy.deepcopy(mini_raw)
+    r["sections"].append(dict(copy.deepcopy(r["sections"][0]), id="A2", name="second A"))
+    r = expand_templates(r)
+    set_path(r, "sections[A].surfaces[roof].solar_absorptance_exterior.value", 0.6)
+    cfg = VenueConfig.model_validate(r)
+    a, a2 = cfg.section("A"), cfg.section("A2")
+    roof = lambda s: next(x for x in s.surfaces if x.id == "roof")  # noqa: E731
+    assert roof(a).solar_absorptance_exterior.value == 0.6
+    assert roof(a2).solar_absorptance_exterior.value == 0.7
+    assert a.template == a2.template == "roofed_open_seating"
+
+
+def test_value_outside_template_bounds_is_rejected(mini_raw):
+    r = copy.deepcopy(mini_raw)
+    set_path(r, "sections[A].surfaces[roof].solar_absorptance_exterior.value", 0.2)
+    with pytest.raises(ValidationError, match="outside bounds"):
+        VenueConfig.model_validate(r)
+    # replacing the whole quantity (new provenance, no bounds) is allowed and is not re-bounded
+    r = copy.deepcopy(mini_raw)
+    set_path(r, "sections[A].surfaces[roof].solar_absorptance_exterior", q(0.2, "-", "white coating"))
+    cfg = VenueConfig.model_validate(expand_templates(r))
+    assert next(x for x in cfg.section("A").surfaces if x.id == "roof").solar_absorptance_exterior.bounds is None
+
+
+def test_uncertain_parameters_have_units_and_sources(mini_raw):
+    found = find_uncertain(mini_raw)
+    assert len(found) > 10
+    for path, qd in found:
+        assert qd["unit"] and qd["source"].strip() and len(qd["bounds"]) == 2
+
+
+def test_uncertain_passive_option_values_are_drawable():
+    from venuecool.runner import Study
+    from pathlib import Path
+    study = Study(Path(__file__).resolve().parents[1] / "examples" / "bus_stop.yaml")
+    paths = [p for p, _ in find_uncertain(study.raw) if p.startswith("passive_options[")]
+    assert "passive_options[cool_roof].set::sections[shelter].surfaces[roof].solar_absorptance_exterior.value" in paths
+    for p in paths:  # every reported path must be settable
+        set_path(copy.deepcopy(study.raw), p, 0.3)
+    r = study.raw_for(passive=["cool_roof"], draw={paths[0]: 0.31})
+    roof = next(s for s in next(x for x in r["sections"] if x["id"] == "shelter")["surfaces"] if s["id"] == "roof")
+    assert roof["solar_absorptance_exterior"]["value"] == 0.31
+    from venuecool.uncertainty import unused_by
+    assert unused_by(study, "A_fan", paths[0])                      # fan scenario has no cool roof
+    assert unused_by(study, "A_fan", "device_presets.evaporative_cooler.airflow.value")
+    assert not unused_by(study, "B_evap", "device_presets.evaporative_cooler.airflow.value")
+    assert not unused_by(study, "A_fan", "sections[shelter].occupancy.clo.value")
+    from venuecool.uncertainty import unused_by
+    assert unused_by(study, "A_fan", paths[0])                      # fan scenario has no cool roof
+    assert unused_by(study, "A_fan", "device_presets.evaporative_cooler.airflow.value")
+    assert not unused_by(study, "B_evap", "device_presets.evaporative_cooler.airflow.value")
+    assert not unused_by(study, "A_fan", "sections[shelter].occupancy.clo.value")
+
+
+def test_device_override_converts_kw_and_rejects_invalid(mini_raw):
+    from venuecool.model import resolve_devices
+    from conftest import study_with
+    r = copy.deepcopy(mini_raw)
+    fan = next(d for d in r["devices"] if d["id"] == "fan_hour")
+    fan["overrides"] = {"electric_power": q(0.5, "kW", "test override")}
+    cfg = VenueConfig.model_validate(r)
+    assert resolve_devices(cfg, ["fan_hour"])[0].power_W == pytest.approx(500.0)
+
+    def mut(raw):
+        next(d for d in raw["devices"] if d["id"] == "fan_hour")["overrides"] = {
+            "electric_power": q(0.5, "kW", "test override")}
+    led = study_with(mini_raw, mut).run(["fan_hour"], label="half").sim.ledgers[0]
+    assert led["electric_power_kW"] == pytest.approx(0.5)
+    assert led["electricity_kWh"] == pytest.approx(0.5 * led["on_hours"])
+
+    def bad(field, quantity, match):
+        raw = copy.deepcopy(mini_raw)
+        next(d for d in raw["devices"] if d["id"] == "evap_out")["overrides"] = {field: quantity}
+        with pytest.raises((ValidationError, ValueError), match=match):
+            VenueConfig.model_validate(raw)
+    bad("saturation_effectiveness", q(1.5, "-", "above 1"), "saturation_effectiveness")
+    bad("airflow", q(-1.0, "m3/s", "negative"), "airflow")
+    bad("plume_fraction", q(1.2, "-", "above 1"), "plume_fraction")
+    bad("no_such_field", q(1.0, "-", "typo"), "unknown preset field")
+
+
+def test_weather_missing_columns_and_nans_raise(tmp_path, mini_study):
+    site = mini_study.cfg0.site
+    p = tmp_path / "w.csv"
+    p.write_text("time_h,temp_C,rh_pct,pressure_Pa,wind_ms\n0,30,40,101325,1\n1,31,40,101325,1\n")
+    with pytest.raises(InputDataError, match="missing required"):
+        load_weather(p, site)
+    p.write_text("time_h,temp_C,rh_pct,pressure_Pa,wind_ms,ghi_Wm2\n0,30,40,101325,1,0\n1,31,40,101325,1,10\n")
+    with pytest.raises(InputDataError, match="dni_Wm2/dhi_Wm2 missing"):
+        load_weather(p, site)  # no silent decomposition
+    w = load_weather(p, site, solar_split="erbs")
+    assert "DERIVED" in w.meta["solar_split"]
+    p.write_text("time_h,temp_C,rh_pct,pressure_Pa,wind_ms,ghi_Wm2,dni_Wm2,dhi_Wm2\n0,30,,101325,1,0,0,0\n1,31,40,101325,1,0,0,0\n")
+    with pytest.raises(InputDataError, match="NaN"):
+        load_weather(p, site)
+    with pytest.raises(InputDataError, match="not found"):
+        load_weather(tmp_path / "missing.csv", site)
+
+
+def test_weather_must_cover_run(tmp_path, mini_raw):
+    from venuecool.runner import Study
+    r = copy.deepcopy(mini_raw)
+    p = tmp_path / "short.csv"
+    p.write_text("time_h,temp_C,rh_pct,pressure_Pa,wind_ms,ghi_Wm2,dni_Wm2,dhi_Wm2\n" +
+                 "\n".join(f"{h},30,40,101325,1,0,0,0" for h in range(12)) + "\n")
+    r["weather"]["file"] = str(p)
+    s = Study(r)
+    with pytest.raises(ValueError, match="weather covers"):
+        s.run_scenario("baseline")
+
+
+def test_load_raw_include_merges():
+    raw = load_raw(MINI)
+    assert "fan_system" in raw["device_presets"] and "templates" in raw

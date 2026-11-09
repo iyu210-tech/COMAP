@@ -172,6 +172,33 @@ def test_ratios_formed_after_summing(mini_study, mini_base):
     assert c["relief_per_kWh"] == pytest.approx(c["relief_Kph"] / c["incremental_kWh"])
 
 
+def test_offgrid_schedule_matches_fine_grid(mini_raw):
+    """A schedule edge that is not on the reporting grid must still hand the true endpoint onward."""
+    def prepare(r, step):
+        r["simulation"]["warmup_days"] = 0
+        r["simulation"]["end_h"] = 2
+        r["simulation"]["output_step_s"] = step
+        r["simulation"]["rtol"] = 1e-7
+        r["schedules"]["offgrid"] = {"mode": "hours", "intervals": [[0.0, 0.35]]}
+        for d in r["devices"]:
+            if d["id"] == "evap_out":
+                d["schedule"] = "offgrid"
+    coarse = study_with(mini_raw, lambda r: prepare(r, 600.0)).run(["evap_out"], label="coarse")
+    fine = study_with(mini_raw, lambda r: prepare(r, 60.0)).run(["evap_out"], label="fine")
+    assert 1260.0 not in set(np.round(coarse.sim.t, 5))
+    assert any(abs(t - 1260.0) < 1e-6 for t in fine.sim.t)
+
+    def air_at(sim, t):
+        i = int(np.argmin(np.abs(sim.t - t)))
+        assert abs(sim.t[i] - t) < 1.0
+        return sim.T_air[i, 0]
+    # 1800 s and 3600 s lie on both grids, after the 1260 s switch
+    assert air_at(coarse.sim, 1800) == pytest.approx(air_at(fine.sim, 1800), abs=0.15)
+    assert air_at(coarse.sim, 3600) == pytest.approx(air_at(fine.sim, 3600), abs=0.15)
+    # reporting grid itself stays on the requested step
+    assert np.all(np.diff(coarse.sim.t) == pytest.approx(600.0))
+
+
 def test_numerical_refinement(mini_raw):
     from venuecool.runner import Study
     res = {}

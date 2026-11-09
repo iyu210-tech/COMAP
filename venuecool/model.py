@@ -28,7 +28,7 @@ from scipy.integrate import solve_ivp
 
 from . import psychro, solar
 from .airflow import make_airflow
-from .config import Schedule, VenueConfig
+from .config import Schedule, VenueConfig, apply_device_overrides
 from .constants import MET_W_M2, SIGMA, T0K
 from .devices import outlet_state
 from .inputs import OccupancySchedule, Weather
@@ -68,11 +68,8 @@ def resolve_devices(cfg: VenueConfig, device_ids: List[str]) -> List[ResolvedDev
     out = []
     for did in device_ids:
         d = by_id[did]
-        p = cfg.device_presets[d.preset].model_copy()
-        vals = {k: getattr(p, k) for k in type(p).model_fields}
-        for k, q in d.overrides.items():
-            vals[k] = q
-        g = lambda k: (vals[k].value if vals[k] is not None else 0.0)  # noqa: E731
+        p = apply_device_overrides(cfg.device_presets[d.preset], d.overrides, f"device {d.id}")
+        g = lambda k: (getattr(p, k).value if getattr(p, k) is not None else 0.0)  # noqa: E731
         serves = []
         for s in d.serves:
             groups = s.groups or [x.id for x in cfg.section(s.section).exposure_groups]
@@ -536,9 +533,15 @@ class Model:
             def fun(t, yy, N=N, on=on):
                 n_rhs[0] += 1
                 return self.rhs_parts(t, yy, N, on)[0]
-            te = grid[(grid >= a - 1e-9) & (grid <= b + 1e-9)]
+            report = grid[(grid >= a - 1e-9) & (grid <= b + 1e-9)]
+            # solve_ivp returns only t_eval samples. If the segment end is not on the
+            # reporting grid, append it so the next segment starts from the true endpoint.
+            if len(report) == 0 or abs(float(report[-1]) - b) > 1e-6:
+                t_eval = np.append(report, b) if len(report) else np.array([b])
+            else:
+                t_eval = report
             kw = dict(method=sim.method, rtol=sim.rtol, atol=atol, max_step=sim.max_step_s,
-                      t_eval=te if len(te) else None)
+                      t_eval=t_eval)
             if sim.method in ("BDF", "Radau"):
                 kw["jac_sparsity"] = sparsity
             with warnings.catch_warnings():
@@ -549,12 +552,12 @@ class Model:
                 break
             if abs(a - self.t0) < 1e-6:
                 y_t0 = y.copy()
-            if len(te):
-                for k, tt in enumerate(sol.t):
-                    if not outs_t or tt > outs_t[-1] + 1e-6:
-                        outs_t.append(tt)
-                        outs_y.append(sol.y[:, k])
-            y = sol.y[:, -1]
+            for k in range(len(report)):
+                tt = float(sol.t[k])
+                if not outs_t or tt > outs_t[-1] + 1e-6:
+                    outs_t.append(tt)
+                    outs_y.append(sol.y[:, k].copy())
+            y = sol.y[:, -1].copy()
             if not np.all(np.isfinite(y)):
                 ok, msg = False, f"non-finite state at {b/3600:.2f} h"
                 break

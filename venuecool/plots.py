@@ -108,3 +108,50 @@ def write_report(outdir, timeseries: pd.DataFrame, comfort: pd.DataFrame,
     if comparison is not None and len(comparison):
         comparison.to_csv(outdir / "comparison.csv", index=False)
     return paths
+
+
+def write_robustness_figures(outdir, table: pd.DataFrame) -> Dict[str, Path]:
+    """Figures for whether the preferred cooler changes under plausible assumptions."""
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    paths: Dict[str, Path] = {}
+    winners = (table[table["preferred"]]
+               .drop_duplicates(["case", "target_C"])
+               [["case", "target_C", "preferred_scenario", "relief_Kph"]])
+    cases = list(dict.fromkeys(winners["case"]))
+    targets = list(dict.fromkeys(winners["target_C"]))
+    z, text = [], []
+    lookup = {(r.case, r.target_C): r for r in winners.itertuples()}
+    for case in cases:
+        z.append([lookup[(case, t)].relief_Kph for t in targets])
+        text.append([lookup[(case, t)].preferred_scenario for t in targets])
+    fig = go.Figure(data=go.Heatmap(
+        z=z, x=[str(t) for t in targets], y=cases, text=text, texttemplate="%{text}",
+        colorbar=dict(title="Relief"), colorscale="YlGnBu", hovertemplate="case %{y}<br>target %{x} C<br>%{text}<extra></extra>"))
+    fig.update_layout(title="Preferred cooling system by assumption and SET target",
+                      xaxis_title="SET target [C]", yaxis_title="Assumption", template="plotly_white")
+    p = outdir / "preferred_system.html"
+    fig.write_html(str(p), include_plotlyjs="cdn")
+    paths["preferred_system"] = p
+
+    sub = table[(table["scenario"] != "baseline") & (table["target_C"] == 30.0)]
+    fig = px.bar(sub, x="case", y="relief_Kph", color="scenario", barmode="group",
+                 color_discrete_map=COLORS,
+                 title="Relief at a 30 C SET target",
+                 labels={"relief_Kph": "Relief [K person-h]", "case": "Assumption", "scenario": "System"})
+    fig.update_layout(template="plotly_white")
+    p = outdir / "relief_by_assumption.html"
+    fig.write_html(str(p), include_plotlyjs="cdn")
+    paths["relief_by_assumption"] = p
+
+    nom = table[(table["case"] == table["case"].iloc[0]) & (table["target_C"] == table["target_C"].iloc[0])]
+    fig = go.Figure()
+    fig.add_bar(name="supported", x=nom["scenario"], y=nom["supported_person_hours"])
+    fig.add_bar(name="extrapolated", x=nom["scenario"], y=nom["extrapolated_person_hours"])
+    fig.update_layout(barmode="stack", template="plotly_white",
+                      title="Supported vs extrapolated person-hours (first case; independent of SET target)",
+                      yaxis_title="Person-hours", xaxis_title="Scenario")
+    p = outdir / "supported_vs_extrapolated.html"
+    fig.write_html(str(p), include_plotlyjs="cdn")
+    paths["supported_vs_extrapolated"] = p
+    return paths

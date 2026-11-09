@@ -1,0 +1,934 @@
+# PART2_core_physics.txt
+# Plain-text pack. Each section starts with ===== FILE: path =====
+
+
+===== FILE: venuecool/__init__.py =====
+"""VenueCool: transient section-resolved cooling assessment for open-air and semi-open venues.
+
+The scientific engine (this package) is independent of the Streamlit dashboard in ``app/``.
+Internal units are SI: K differences / degC temperatures, Pa, kg, s, W (power), J (energy).
+Reported energies are converted to kWh only at the reporting boundary.
+"""
+
+import os
+from pathlib import Path
+
+# pythermalcomfort uses numba with on-disk caching; make sure a writable cache directory exists.
+os.environ.setdefault(
+    "NUMBA_CACHE_DIR", str(Path(__file__).resolve().parent.parent / ".numba_cache")
+)
+
+__version__ = "0.1.0"
+
+
+===== FILE: venuecool/constants.py =====
+"""Physical constants (SI). Values follow ASHRAE Handbook - Fundamentals (2017), Ch. 1."""
+
+CP_DA = 1006.0  # J/(kg_da K), specific heat of dry air
+CP_V = 1860.0  # J/(kg_w K), specific heat of water vapour
+CP_W = 4186.0  # J/(kg_w K), specific heat of liquid water
+H_FG0 = 2.501e6  # J/kg_w, latent heat of vaporisation at 0 degC (enthalpy datum)
+R_DA = 287.042  # J/(kg_da K)
+EPS_W = 0.621945  # ratio of molar masses water/dry air
+SIGMA = 5.670374419e-8  # W/(m2 K4)
+T0K = 273.15
+P_STD = 101325.0  # Pa
+MET_W_M2 = 58.15  # W/m2 per met
+J_PER_KWH = 3.6e6
+
+
+===== FILE: venuecool/quantity.py =====
+"""Quantities with explicit units, provenance and optional uncertainty bounds.
+
+Every influential parameter in a configuration is written as::
+
+    {value: 0.8, unit: "-", source: "assumption: rigid media pad", bounds: [0.7, 0.9]}
+
+The schema declares the canonical internal unit for each field. Accepted alternative units are
+converted on load (e.g. kW -> W, m3/h -> m3/s, % -> fraction). Unknown or mismatched units are
+rejected rather than guessed.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated, Literal, Optional, Tuple
+
+from pydantic import AfterValidator, BaseModel, ConfigDict, field_validator, model_validator
+
+# (from_unit, canonical_unit) -> (scale, offset): canonical = value*scale + offset
+_CONVERSIONS = {
+    ("kW", "W"): (1000.0, 0.0),
+    ("W", "W"): (1.0, 0.0),
+    ("m3/h", "m3/s"): (1.0 / 3600.0, 0.0),
+    ("L/s", "m3/s"): (1.0e-3, 0.0),
+    ("%", "-"): (0.01, 0.0),
+    ("K", "degC"): (1.0, -273.15),
+    ("mm", "m"): (1.0e-3, 0.0),
+    ("cm", "m"): (1.0e-2, 0.0),
+    ("kJ/(kg*K)", "J/(kg*K)"): (1000.0, 0.0),
+    ("hPa", "Pa"): (100.0, 0.0),
+    ("kPa", "Pa"): (1000.0, 0.0),
+    ("USD/MWh", "USD/kWh"): (1.0e-3, 0.0),
+    ("USD/L", "USD/m3"): (1000.0, 0.0),
+}
+
+
+class Quantity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value: float
+    unit: str
+    source: str
+    bounds: Optional[Tuple[float, float]] = None
+    distribution: Literal["uniform", "triangular"] = "uniform"
+
+    @field_validator("source")
+    @classmethod
+    def _source_nonempty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("every quantity needs a non-empty provenance 'source'")
+        return v
+
+    @model_validator(mode="after")
+    def _bounds_ok(self):
+        if self.bounds is not None:
+            lo, hi = self.bounds
+            if lo > hi:
+                raise ValueError(f"bounds {self.bounds} are reversed")
+            if not (lo <= self.value <= hi):
+                raise ValueError(f"nominal value {self.value} lies outside bounds {self.bounds}")
+        return self
+
+    def to(self, canonical: str) -> "Quantity":
+        if self.unit == canonical:
+            return self
+        key = (self.unit, canonical)
+        if key not in _CONVERSIONS:
+            raise ValueError(
+                f"unit '{self.unit}' is not accepted here; expected '{canonical}'"
+                + (f" (convertible: {[k[0] for k in _CONVERSIONS if k[1] == canonical]})")
+            )
+        s, o = _CONVERSIONS[key]
+        b = None if self.bounds is None else (self.bounds[0] * s + o, self.bounds[1] * s + o)
+        return Quantity(value=self.value * s + o, unit=canonical,
+                        source=self.source + f" [converted from {self.unit}]",
+                        bounds=b, distribution=self.distribution)
+
+    @property
+    def v(self) -> float:
+        return self.value
+
+
+def _unit_checker(canonical: str):
+    def check(q: Quantity) -> Quantity:
+        return q.to(canonical)
+    return check
+
+
+def Q(canonical: str):
+    """Annotated Quantity type whose unit is validated/converted to ``canonical``."""
+    return Annotated[Quantity, AfterValidator(_unit_checker(canonical))]
+
+
+def q(value, unit, source, bounds=None) -> dict:
+    """Convenience constructor for raw config dicts (used by tests and generators)."""
+    d = {"value": value, "unit": unit, "source": source}
+    if bounds is not None:
+        d["bounds"] = list(bounds)
+    return d
+
+
+===== FILE: venuecool/psychro.py =====
+"""Moist-air psychrometrics (ASHRAE Fundamentals 2017, Ch. 1).
+
+Conserved air states are the humidity ratio W [kg_w/kg_da] and the moist-air specific
+enthalpy h [J/kg_da]. Temperature and relative humidity are always *derived*.
+Relative humidity (RH, 0-1 fraction internally) is never used as a state variable.
+
+No function clips values: callers decide what to do with supersaturated or negative
+states (see :func:`state_validity`).
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+from .constants import CP_DA, CP_V, CP_W, EPS_W, H_FG0, P_STD, R_DA, T0K
+
+
+def p_ws(t_c):
+    """Saturation vapour pressure [Pa] over liquid water (t>=0) or ice (t<0); Hyland-Wexler."""
+    t = np.asarray(t_c, dtype=float) + T0K
+    # over ice (ASHRAE eq. 5)
+    c1, c2, c3, c4, c5, c6, c7 = (-5.6745359e03, 6.3925247e00, -9.6778430e-03, 6.2215701e-07,
+                                  2.0747825e-09, -9.4840240e-13, 4.1635019e00)
+    ln_ice = c1 / t + c2 + c3 * t + c4 * t**2 + c5 * t**3 + c6 * t**4 + c7 * np.log(t)
+    # over water (ASHRAE eq. 6)
+    c8, c9, c10, c11, c12, c13 = (-5.8002206e03, 1.3914993e00, -4.8640239e-02, 4.1764768e-05,
+                                  -1.4452093e-08, 6.5459673e00)
+    ln_w = c8 / t + c9 + c10 * t + c11 * t**2 + c12 * t**3 + c13 * np.log(t)
+    return np.exp(np.where(t >= T0K, ln_w, ln_ice))
+
+
+def w_from_pw(p_w, p=P_STD):
+    return EPS_W * p_w / (p - p_w)
+
+
+def pw_from_w(w, p=P_STD):
+    w = np.asarray(w, dtype=float)
+    return p * w / (EPS_W + w)
+
+
+def w_sat(t_c, p=P_STD):
+    return w_from_pw(p_ws(t_c), p)
+
+
+def w_from_rh(t_c, rh, p=P_STD):
+    """Humidity ratio from temperature [degC] and relative humidity *fraction* (0-1)."""
+    return w_from_pw(np.asarray(rh) * p_ws(t_c), p)
+
+
+def rh_from_w(t_c, w, p=P_STD):
+    """Relative humidity fraction (may exceed 1 for supersaturated states; not clipped)."""
+    return pw_from_w(w, p) / p_ws(t_c)
+
+
+def enthalpy(t_c, w):
+    """Moist-air enthalpy [J/kg_da], datum: dry air at 0 degC and liquid water at 0 degC."""
+    t_c = np.asarray(t_c, dtype=float)
+    return CP_DA * t_c + np.asarray(w) * (H_FG0 + CP_V * t_c)
+
+
+def t_from_hw(h, w):
+    """Dry-bulb temperature [degC] from enthalpy and humidity ratio (exact inverse of enthalpy)."""
+    w = np.asarray(w, dtype=float)
+    return (np.asarray(h, dtype=float) - H_FG0 * w) / (CP_DA + CP_V * w)
+
+
+def h_vapour(t_c):
+    """Specific enthalpy of water vapour [J/kg_w] at t_c (same datum as :func:`enthalpy`)."""
+    return H_FG0 + CP_V * np.asarray(t_c, dtype=float)
+
+
+def h_liquid(t_c):
+    return CP_W * np.asarray(t_c, dtype=float)
+
+
+def rho_da(t_c, w, p=P_STD):
+    """Dry-air density [kg_da per m3 of moist air]."""
+    p_da = p - pw_from_w(w, p)
+    return p_da / (R_DA * (np.asarray(t_c, dtype=float) + T0K))
+
+
+def _wb_resid(ts, h_in, w, p):
+    """Adiabatic-saturation residual using the same enthalpy constants as :func:`enthalpy`:
+    h(t*, Ws(t*)) - [h_in + (Ws(t*) - W) * h_liquid(t*)]  (increasing in t*)."""
+    ws = w_sat(ts, p)
+    return enthalpy(ts, ws) - h_in - (ws - w) * CP_W * ts
+
+
+def wet_bulb(t_c, w, p=P_STD, tol=1e-7, max_iter=80):
+    """Thermodynamic (adiabatic-saturation) wet-bulb temperature [degC], vectorised bisection."""
+    t = np.atleast_1d(np.asarray(t_c, dtype=float))
+    w = np.broadcast_to(np.asarray(w, dtype=float), t.shape)
+    p = np.broadcast_to(np.asarray(p, dtype=float), t.shape)
+    h_in = enthalpy(t, w)
+    lo = np.full_like(t, -40.0)
+    hi = t + 1e-9
+    for _ in range(max_iter):
+        mid = 0.5 * (lo + hi)
+        r = _wb_resid(mid, h_in, w, p)
+        hi = np.where(r > 0, mid, hi)
+        lo = np.where(r > 0, lo, mid)
+        if np.max(hi - lo) < tol:
+            break
+    out = 0.5 * (lo + hi)
+    return out if np.ndim(t_c) else float(out[0])
+
+
+def wet_bulb_fast(t_c, w, p=P_STD, n_iter=8):
+    """Secant-method wet bulb for use inside the ODE right-hand side (same definition)."""
+    t = np.asarray(t_c, dtype=float)
+    w = np.asarray(w, dtype=float)
+    h_in = enthalpy(t, w)
+    a = t - 0.6 * np.maximum(t - dew_point_fast(w, p), 0.0)
+    b = a + 0.3
+    fa = _wb_resid(a, h_in, w, p)
+    fb = _wb_resid(b, h_in, w, p)
+    for _ in range(n_iter):
+        d = fb - fa
+        c = np.where(np.abs(d) > 1e-12, b - fb * (b - a) / np.where(np.abs(d) > 1e-12, d, 1.0), b)
+        a, fa = b, fb
+        b, fb = c, _wb_resid(c, h_in, w, p)
+    return b
+
+
+def dew_point_fast(w, p=P_STD):
+    """Magnus-form dew point (initial guess only)."""
+    pw = np.maximum(pw_from_w(w, p), 1e-3)
+    g = np.log(pw / 610.94)
+    return 243.04 * g / (17.625 - g)
+
+
+def dew_point(w, p=P_STD):
+    """Dew-point temperature [degC] by bisection on p_ws(t_dp) = p_w."""
+    pw = np.atleast_1d(pw_from_w(w, p))
+    lo = np.full_like(pw, -60.0)
+    hi = np.full_like(pw, 80.0)
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        f = p_ws(mid) > pw
+        hi = np.where(f, mid, hi)
+        lo = np.where(f, lo, mid)
+    out = 0.5 * (lo + hi)
+    return out if np.ndim(w) else float(out[0])
+
+
+def state_validity(t_c, w, p=P_STD, t_min=-40.0, t_max=70.0, rh_tol=1e-3):
+    """Return a dict of boolean arrays flagging physically invalid / unsupported air states."""
+    t_c = np.asarray(t_c, dtype=float)
+    w = np.asarray(w, dtype=float)
+    rh = rh_from_w(t_c, w, p)
+    return {
+        "negative_humidity": w < 0,
+        "supersaturated": rh > 1.0 + rh_tol,
+        "temperature_out_of_range": (t_c < t_min) | (t_c > t_max),
+        "non_finite": ~np.isfinite(t_c) | ~np.isfinite(w),
+    }
+
+
+===== FILE: venuecool/devices.py =====
+"""Cooling devices as 'air handlers'.
+
+Every device moves a dry-air mass flow m [kg_da/s] from an intake (outdoor air, or a recirculated
+mixture of the sections it serves) through an optional process to its outlet, then delivers the
+outlet air to served sections in fixed airflow fractions f_k (sum f_k = 1, reconciled once).
+
+* Fan (kind 'fan'): process = none. Electrical input P ends as heat (motor_heat_to_air * P) in the
+  delivered air. There is NO refrigeration term; comfort benefit comes only through local air
+  speed (covered_air_speed in covered exposure groups) and mixing.
+* Direct evaporative cooler (kind 'evaporative'): adiabatic pad,
+  T_pad = T_in - eps (T_in - T_wb,in); W_pad from the pad energy balance
+  h_pad = h_in + (W_pad - W_in) h_liquid(T_water), with make-up water at the inlet wet-bulb
+  temperature (labelled assumption). Outlet h_out = h_pad + motor heat / m.
+  eps <= 1 guarantees T_pad >= T_wb and W_pad <= W_sat(T_pad).
+
+The same function is used inside the ODE right-hand side and in post-processing, so the comfort
+model sees exactly the outlet states that drove the energy balance.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+from . import psychro
+from .constants import CP_DA, CP_V, CP_W, H_FG0
+
+
+def evaporative_pad(t_in, w_in, p, eff, fast=True):
+    """Return (t_pad, w_pad, t_wb). Arrays broadcast."""
+    t_wb = psychro.wet_bulb_fast(t_in, w_in, p) if fast else psychro.wet_bulb(t_in, w_in, p)
+    t_pad = t_in - eff * (t_in - t_wb)
+    h_in = psychro.enthalpy(t_in, w_in)
+    hf = CP_W * t_wb
+    w_pad = (h_in - w_in * hf - CP_DA * t_pad) / (H_FG0 + CP_V * t_pad - hf)
+    return t_pad, w_pad, t_wb
+
+
+def outlet_state(h_in, w_in, p, kind_evap, eff, heat_W, m_da, fast=True):
+    """Outlet (h_out, w_out, evap_kg_per_s) for arrays of devices.
+
+    kind_evap: boolean array, eff: saturation effectiveness (ignored for fans).
+    """
+    h_in = np.asarray(h_in, float)
+    w_in = np.asarray(w_in, float)
+    t_in = psychro.t_from_hw(h_in, w_in)
+    h_out = h_in.copy()
+    w_out = w_in.copy()
+    if np.any(kind_evap):
+        k = np.asarray(kind_evap, bool)
+        pk = np.broadcast_to(p, h_in.shape)[k]
+        t_pad, w_pad, _ = evaporative_pad(t_in[k], w_in[k], pk, np.asarray(eff)[k], fast=fast)
+        h_out[k] = psychro.enthalpy(t_pad, w_pad)
+        w_out[k] = w_pad
+    h_out = h_out + np.asarray(heat_W) / np.maximum(m_da, 1e-12)
+    evap = np.asarray(m_da) * (w_out - w_in)
+    return h_out, w_out, evap
+
+
+===== FILE: venuecool/solar.py =====
+"""Solar geometry (NOAA/Spencer approximations) and optional Erbs diffuse split.
+
+Angles in degrees; azimuth measured clockwise from north.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+
+def solar_position(hour_local, day_of_year, lat_deg, lon_deg, utc_offset_h):
+    """Return (altitude_deg, azimuth_deg) for local standard clock hours (array-like)."""
+    h = np.asarray(hour_local, dtype=float)
+    g = 2 * np.pi / 365.0 * (day_of_year - 1 + (h - 12) / 24.0)
+    eot = 229.18 * (0.000075 + 0.001868 * np.cos(g) - 0.032077 * np.sin(g)
+                    - 0.014615 * np.cos(2 * g) - 0.040849 * np.sin(2 * g))  # minutes
+    decl = (0.006918 - 0.399912 * np.cos(g) + 0.070257 * np.sin(g) - 0.006758 * np.cos(2 * g)
+            + 0.000907 * np.sin(2 * g) - 0.002697 * np.cos(3 * g) + 0.00148 * np.sin(3 * g))
+    tst = h * 60 + eot + 4 * lon_deg - 60 * utc_offset_h  # true solar time, minutes
+    ha = np.radians(tst / 4.0 - 180.0)
+    lat = np.radians(lat_deg)
+    cosz = np.sin(lat) * np.sin(decl) + np.cos(lat) * np.cos(decl) * np.cos(ha)
+    cosz = np.clip(cosz, -1, 1)
+    zen = np.arccos(cosz)
+    alt = 90 - np.degrees(zen)
+    sinz = np.maximum(np.sin(zen), 1e-9)
+    cos_az = (np.sin(decl) - np.sin(lat) * cosz) / (np.cos(lat) * sinz)
+    az = np.degrees(np.arccos(np.clip(cos_az, -1, 1)))
+    az = np.where(ha > 0, 360 - az, az)
+    return alt, az
+
+
+def extraterrestrial_normal(day_of_year):
+    return 1361.0 * (1 + 0.033 * np.cos(2 * np.pi * day_of_year / 365.0))
+
+
+def erbs_split(ghi, alt_deg, day_of_year):
+    """Erbs et al. (1982) decomposition GHI -> (DNI, DHI). Derived, not measured."""
+    ghi = np.asarray(ghi, dtype=float)
+    sin_alt = np.sin(np.radians(np.asarray(alt_deg, dtype=float)))
+    i0h = extraterrestrial_normal(day_of_year) * np.maximum(sin_alt, 0)
+    kt = np.where(i0h > 10, ghi / np.maximum(i0h, 1e-9), 0.0)
+    kd = np.where(kt <= 0.22, 1 - 0.09 * kt,
+                  np.where(kt <= 0.8, 0.9511 - 0.1604 * kt + 4.388 * kt**2 - 16.638 * kt**3 + 12.336 * kt**4,
+                           0.165))
+    dhi = kd * ghi
+    dni = np.where(sin_alt > 0.05, (ghi - dhi) / np.maximum(sin_alt, 0.05), 0.0)
+    return np.maximum(dni, 0), dhi
+
+
+def vertical_beam_factor(alt_deg, az_deg, surface_az_deg):
+    """cos(incidence) for a vertical surface with outward normal azimuth (0 if sun behind)."""
+    alt = np.radians(alt_deg)
+    c = np.cos(alt) * np.cos(np.radians(np.asarray(az_deg) - surface_az_deg))
+    return np.where(np.asarray(alt_deg) > 0, np.maximum(c, 0), 0.0)
+
+
+===== FILE: venuecool/airflow.py =====
+"""Airflow providers: outdoor-air exchange and inter-section exchange flows.
+
+The default :class:`ParametricAirflow` uses Q = Q_min + C_w * A_open * U_10 for every opening
+(balanced two-way exchange: equal dry-air mass in and out). Later measurements (tracer gas) or
+CFD can replace it with :class:`TableAirflow` (or any object with the same ``flows`` method)
+without touching the thermal model.
+"""
+
+from __future__ import annotations
+
+from typing import Dict, Protocol, Tuple
+
+import numpy as np
+import pandas as pd
+
+
+class AirflowProvider(Protocol):
+    def flows(self, wind_ms: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Return (Q_outdoor[n_t, n_sections], Q_connection[n_t, n_connections]) in m3/s."""
+
+
+class ParametricAirflow:
+    def __init__(self, cfg):
+        self.q0_o = np.array([s.outdoor.min_flow.value for s in cfg.sections])
+        self.ca_o = np.array([s.outdoor.wind_coefficient.value * s.outdoor.opening_area_m2 for s in cfg.sections])
+        self.q0_c = np.array([c.min_flow.value for c in cfg.connections])
+        self.ca_c = np.array([c.wind_coefficient.value * c.opening_area_m2 for c in cfg.connections])
+
+    def flows(self, wind_ms):
+        u = np.asarray(wind_ms, float)[:, None]
+        return self.q0_o[None, :] + self.ca_o[None, :] * u, self.q0_c[None, :] + self.ca_c[None, :] * u
+
+
+class TableAirflow:
+    """Interpolate measured / CFD-derived flows vs wind speed from a CSV with columns
+    ``wind_ms, out:<section_id>..., conn:<connection_id>...`` (m3/s)."""
+
+    def __init__(self, cfg, csv_path):
+        from .inputs import InputDataError
+        df = pd.read_csv(csv_path, comment="#")
+        need = ["wind_ms"] + [f"out:{s.id}" for s in cfg.sections] + [f"conn:{c.id}" for c in cfg.connections]
+        missing = [c for c in need if c not in df.columns]
+        if missing:
+            raise InputDataError(f"airflow table {csv_path}: missing columns {missing}")
+        vals = df[need].to_numpy(float)
+        if not np.all(np.isfinite(vals)) or np.any(vals < 0):
+            raise InputDataError(f"airflow table {csv_path}: values must be finite and non-negative")
+        if np.any(np.diff(df["wind_ms"].to_numpy(float)) <= 0):
+            raise InputDataError(f"airflow table {csv_path}: wind_ms must be strictly increasing")
+        self.u = df["wind_ms"].to_numpy(float)
+        self.out = [df[f"out:{s.id}"].to_numpy(float) for s in cfg.sections]
+        self.conn = [df[f"conn:{c.id}"].to_numpy(float) for c in cfg.connections]
+
+    def flows(self, wind_ms):
+        u = np.asarray(wind_ms, float)
+        qo = np.stack([np.interp(u, self.u, a) for a in self.out], axis=1) if self.out else np.zeros((len(u), 0))
+        qc = np.stack([np.interp(u, self.u, a) for a in self.conn], axis=1) if self.conn else np.zeros((len(u), 0))
+        return qo, qc
+
+
+PROVIDERS: Dict[str, type] = {"parametric": ParametricAirflow, "table": TableAirflow}
+
+
+def make_airflow(cfg):
+    spec = cfg.airflow
+    if spec.provider == "table":
+        return TableAirflow(cfg, cfg.path(spec.file))
+    return ParametricAirflow(cfg)
+
+
+===== FILE: venuecool/inputs.py =====
+"""CSV weather and occupancy schedules.
+
+Weather CSV (hourly or finer), '#' comment lines may carry ``key: value`` metadata such as
+``data_status: SYNTHETIC_DEMONSTRATION``. Required columns::
+
+    time_h, temp_C, rh_pct, pressure_Pa, wind_ms, ghi_Wm2
+
+``dni_Wm2`` and ``dhi_Wm2`` are required unless the configuration explicitly selects
+``solar_split: erbs`` (then they are *derived* and labelled as such). Missing columns, gaps,
+NaNs or out-of-range values raise :class:`InputDataError` -- nothing is silently fabricated.
+
+Occupancy CSV: ``time_h`` plus one column of people counts per section. Each row holds the mean
+number of people present from that row's time until the next row (step function).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict
+
+import numpy as np
+import pandas as pd
+
+from . import psychro, solar
+
+
+class InputDataError(ValueError):
+    pass
+
+
+def read_meta(path) -> Dict[str, str]:
+    meta = {}
+    for line in Path(path).read_text().splitlines():
+        if line.startswith("#") and ":" in line:
+            k, v = line[1:].split(":", 1)
+            meta[k.strip()] = v.strip()
+    return meta
+
+
+def _read_csv_with_meta(path: Path):
+    if not Path(path).exists():
+        raise InputDataError(f"input file not found: {path} (no substitute data will be generated)")
+    meta = read_meta(path)
+    try:
+        df = pd.read_csv(path, comment="#")
+    except Exception as e:  # noqa: BLE001
+        raise InputDataError(f"failed to read {path}: {e}") from e
+    meta.setdefault("data_status", "UNSPECIFIED")
+    return df, meta
+
+
+@dataclass
+class Weather:
+    t_s: np.ndarray  # seconds from day-0 midnight
+    temp_C: np.ndarray
+    w: np.ndarray  # humidity ratio kg/kg_da (derived from RH, interpolated as conserved quantity)
+    pressure_Pa: np.ndarray
+    wind_ms: np.ndarray
+    ghi: np.ndarray
+    dni: np.ndarray
+    dhi: np.ndarray
+    meta: Dict[str, str] = field(default_factory=dict)
+
+    def at(self, t_s):
+        """Linear interpolation of all channels at time(s) t_s (seconds)."""
+        f = lambda a: np.interp(t_s, self.t_s, a)  # noqa: E731
+        return f(self.temp_C), f(self.w), f(self.pressure_Pa), f(self.wind_ms), f(self.ghi), f(self.dni), f(self.dhi)
+
+
+def load_weather(path, site, solar_split="provided") -> Weather:
+    df, meta = _read_csv_with_meta(path)
+    req = ["time_h", "temp_C", "rh_pct", "pressure_Pa", "wind_ms", "ghi_Wm2"]
+    missing = [c for c in req if c not in df.columns]
+    if missing:
+        raise InputDataError(f"{path}: missing required weather columns {missing}")
+    has_split = "dni_Wm2" in df.columns and "dhi_Wm2" in df.columns
+    if not has_split and solar_split != "erbs":
+        raise InputDataError(
+            f"{path}: dni_Wm2/dhi_Wm2 missing. Provide them or set weather.solar_split: erbs "
+            "explicitly to derive them (derived values are labelled).")
+    cols = req + (["dni_Wm2", "dhi_Wm2"] if has_split and solar_split == "provided" else [])
+    if df[cols].isna().any().any():
+        raise InputDataError(f"{path}: NaN/blank values in weather data; fill or remove the period explicitly")
+    t = df["time_h"].to_numpy(float)
+    if np.any(np.diff(t) <= 0):
+        raise InputDataError(f"{path}: time_h must be strictly increasing")
+    if np.max(np.diff(t)) > 3.0 + 1e-9:
+        raise InputDataError(f"{path}: gaps longer than 3 h in weather data")
+    rh = df["rh_pct"].to_numpy(float)
+    if np.any((rh < 0) | (rh > 100)):
+        raise InputDataError(f"{path}: rh_pct outside [0, 100]")
+    for c, lo, hi in [("temp_C", -40, 60), ("pressure_Pa", 5e4, 1.1e5), ("wind_ms", 0, 60), ("ghi_Wm2", 0, 1500)]:
+        a = df[c].to_numpy(float)
+        if np.any((a < lo) | (a > hi)):
+            raise InputDataError(f"{path}: {c} outside plausible range [{lo}, {hi}]")
+    temp = df["temp_C"].to_numpy(float)
+    p = df["pressure_Pa"].to_numpy(float)
+    w = psychro.w_from_rh(temp, rh / 100.0, p)
+    ghi = df["ghi_Wm2"].to_numpy(float)
+    if solar_split == "provided":
+        dni, dhi = df["dni_Wm2"].to_numpy(float), df["dhi_Wm2"].to_numpy(float)
+    else:
+        alt, _ = solar.solar_position(t, site.day_of_year, site.latitude_deg, site.longitude_deg, site.utc_offset_h)
+        dni, dhi = solar.erbs_split(ghi, alt, site.day_of_year)
+        meta["solar_split"] = "DERIVED via Erbs (1982) from GHI"
+    return Weather(t * 3600.0, temp, w, p, df["wind_ms"].to_numpy(float), ghi, dni, dhi, meta)
+
+
+@dataclass
+class OccupancySchedule:
+    t_s: np.ndarray  # row start times (s)
+    counts: Dict[str, np.ndarray]
+    meta: Dict[str, str]
+
+    def at(self, col: str, t_s):
+        """People present (step function, value of the most recent row)."""
+        idx = np.searchsorted(self.t_s, t_s, side="right") - 1
+        idx = np.clip(idx, 0, len(self.t_s) - 1)
+        return self.counts[col][idx]
+
+    def person_seconds(self, col: str, t0: float, t1: float) -> float:
+        """Exact integral of the step schedule over [t0, t1]."""
+        edges = np.concatenate([self.t_s, [np.inf]])
+        tot = 0.0
+        for i in range(len(self.t_s)):
+            a, b = max(t0, edges[i]), min(t1, edges[i + 1])
+            if b > a:
+                tot += self.counts[col][i] * (b - a)
+        return tot
+
+
+def load_occupancy(path, columns) -> OccupancySchedule:
+    df, meta = _read_csv_with_meta(path)
+    if "time_h" not in df.columns:
+        raise InputDataError(f"{path}: missing time_h column")
+    missing = [c for c in columns if c not in df.columns]
+    if missing:
+        raise InputDataError(f"{path}: missing occupancy columns {missing}")
+    if df[list(columns)].isna().any().any():
+        raise InputDataError(f"{path}: blank occupancy values")
+    t = df["time_h"].to_numpy(float)
+    if np.any(np.diff(t) <= 0):
+        raise InputDataError(f"{path}: time_h must be strictly increasing")
+    counts = {c: df[c].to_numpy(float) for c in columns}
+    for c, a in counts.items():
+        if np.any(a < 0):
+            raise InputDataError(f"{path}: negative people count in column {c}")
+    return OccupancySchedule(t * 3600.0, counts, meta)
+
+
+===== FILE: venuecool/comfort.py =====
+"""Local human response: mean radiant temperature, local air, SET via pythermalcomfort.
+
+Populations: each section is split into exposure groups (device coverage) and, within each
+group, into sunlit and shaded people. The sunlit share equals the section's sunlit floor
+fraction f_sun(t) -- the *same* number used for floor solar absorption, so sunlight is treated
+consistently for surfaces and occupants.
+
+MRT (ASHRAE 55-2023 Appendix C 'SolarCal' structure):
+  T_lw^4 = sum_k F_k T_k^4  (floor, roof underside, walls, sky, surroundings at outdoor air temp)
+  dMRT_dir = SolarCal direct-beam term (pythermalcomfort.solar_gain, f_svv=0, f_bes=1),
+             averaged over body orientations, scaled linearly with DNI (the term is linear)
+  dMRT_dif = 0.5 f_eff f_svv (DHI + I_floor R_floor) (a_sw/a_lw) / (f_eff h_r)
+  MRT = T_lw + f_bes * dMRT_dir + dMRT_dif
+with I_floor and R_floor = 1 - floor absorptance taken from the floor surface model.
+Prescribed mode: T_lw = T_air + prescribed offset (solar optional).
+
+Local air in a covered group: h_loc = h_sec + sum_d w_d (h_out,d - h_sec) (same for W), with
+total weight 1 - prod(1 - plume_d) split in proportion to plume_d (bounded by 1, no double
+counting). Local speed v = sqrt(v_base^2 + sum_d v_d^2).
+
+Classification of every population-interval:
+  supported        SET finite with pythermalcomfort limit_inputs=True (ASHRAE 55 ranges)
+  extrapolated     outside those ranges but inside the declared extended envelope (flagged)
+  unassessed       invalid air state or outside the extended envelope
+"""
+
+from __future__ import annotations
+
+import warnings
+from functools import lru_cache
+
+import numpy as np
+import pandas as pd
+
+from . import psychro
+from .constants import T0K
+
+F_EFF = {"standing": 0.725, "sitting": 0.696}
+H_R = 6.012
+A_LW = 0.95
+
+
+@lru_cache(maxsize=32)
+def _direct_table(posture: str, asw: float, sharps: tuple):
+    from pythermalcomfort.models import solar_gain
+    alts = np.linspace(0.5, 89.5, 90)
+    vals = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for s in sharps:
+            r = solar_gain(sol_altitude=alts, sharp=np.full_like(alts, s), sol_radiation_dir=np.full_like(alts, 1000.0),
+                           sol_transmittance=np.ones_like(alts), f_svv=np.zeros_like(alts), f_bes=np.ones_like(alts),
+                           asw=asw, posture=posture, round_output=False)
+            vals.append(np.asarray(r.delta_mrt, float) / 1000.0)
+    return alts, np.mean(vals, axis=0)
+
+
+def direct_dmrt(alt_deg, dni, posture, asw, sharps):
+    alts, per = _direct_table(posture, float(asw), tuple(float(s) for s in sharps))
+    alt = np.asarray(alt_deg, float)
+    return np.where(alt > 0, np.interp(alt, alts, per) * np.asarray(dni, float), 0.0)
+
+
+def diffuse_dmrt(f_svv, dhi, i_floor, r_floor, posture, asw):
+    fe = F_EFF[posture]
+    erf = 0.5 * fe * f_svv * (np.asarray(dhi) + np.asarray(i_floor) * r_floor) * asw / A_LW
+    return erf / (fe * H_R)
+
+
+def _set(tdb, tr, v, rh_pct, met, clo, p, posture, strict):
+    from pythermalcomfort.models import set_tmp
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            r = set_tmp(tdb=tdb, tr=tr, v=v, rh=rh_pct, met=met, clo=clo, p_atm=p, position=posture,
+                        limit_inputs=strict, round_output=False)
+            return np.asarray(r.set, float)
+        except Exception:  # noqa: BLE001  pythermalcomfort raises on some invalid inputs
+            out = np.full(np.shape(tdb), np.nan)
+            for i in range(len(out)):
+                try:
+                    out[i] = float(set_tmp(tdb=tdb[i], tr=tr[i], v=v[i], rh=rh_pct[i], met=met, clo=clo, p_atm=p[i],
+                                           position=posture, limit_inputs=strict, round_output=False).set)
+                except Exception:  # noqa: BLE001
+                    out[i] = np.nan
+            return out
+
+
+def evaluate(cfg, model, res) -> pd.DataFrame:
+    """Long-form DataFrame of population-interval comfort results."""
+    mid = res.mid
+    nk = len(mid["t"])
+    comfort = cfg.comfort
+    lim = comfort.extended_limits
+    asw = comfort.solar_absorptance_body.value
+    rows = []
+    for i, sec in enumerate(cfg.sections):
+        T = mid["T_air"][:, i]
+        hsec, Wsec = mid["h"][:, i], mid["W"][:, i]
+        p = mid["p"]
+        Tn = mid["T_nodes"]
+        ov = sec.radiation.occupant_view
+        fl = model.floor_node[i]
+        Tf = Tn[:, fl]
+        Tr = Tn[:, model.roof_node[i]] if i in model.roof_node else Tf
+        wn = model.wall_nodes.get(i, [])
+        if wn:
+            A = np.array([model.node_info[j]["A"] for j in wn])
+            Tw4 = ((Tn[:, wn] + T0K) ** 4 * A).sum(axis=1) / A.sum()
+        else:
+            Tw4 = (T + T0K) ** 4
+        f_sur = 1 - ov.floor - ov.roof - ov.walls - ov.sky
+        if sec.radiation.mode == "computed":
+            T_lw = (ov.floor * (Tf + T0K) ** 4 + ov.roof * (Tr + T0K) ** 4 + ov.walls * Tw4
+                    + ov.sky * (mid["Tsky"] + T0K) ** 4 + f_sur * (mid["To"] + T0K) ** 4) ** 0.25 - T0K
+            add_solar = True
+        else:
+            T_lw = T + sec.radiation.prescribed_mrt_minus_air.value
+            add_solar = sec.radiation.prescribed_add_solar
+        posture = sec.occupancy.posture
+        floor_su = next(s for s in sec.surfaces if s.kind == "floor")
+        r_floor = 1 - floor_su.solar_absorptance_interior.value
+        fsun = mid["fsun"][:, i]
+        sin_alt = np.maximum(np.sin(np.radians(mid["alt"])), 0)
+        i_floor = fsun * mid["dni"] * sin_alt + sec.radiation.floor_view.sky * mid["dhi"]
+        d_dir = direct_dmrt(mid["alt"], mid["dni"], posture, asw, comfort.occupant_sharp_deg) if add_solar else 0 * T
+        d_dif = diffuse_dmrt(ov.sky, mid["dhi"], i_floor, r_floor, posture, asw) if add_solar else 0 * T
+        v_base = np.maximum(cfg.physics.still_air_speed.value, sec.outdoor.local_wind_factor.value * mid["U"])
+        people = mid["people"][:, i]
+        met, clo = sec.occupancy.met.value, sec.occupancy.clo.value
+        for g in sec.exposure_groups:
+            covering = [d for d, dev in enumerate(model.devs) if any(s == i and g.id in grp for s, _, grp in dev.serves)]
+            h_loc, W_loc, v2 = hsec.copy(), Wsec.copy(), v_base ** 2
+            served = np.zeros(nk, bool)
+            if covering:
+                on = res.device_on[:, covering]
+                beta = np.array([model.devs[d].plume for d in covering])[None, :] * on
+                tot = 1 - np.prod(1 - beta, axis=1)
+                ssum = beta.sum(axis=1)
+                w = np.where(ssum[:, None] > 0, beta * (tot / np.where(ssum > 0, ssum, 1))[:, None], 0)
+                h_loc = hsec + (w * (res.device_outlet_h[:, covering] - hsec[:, None])).sum(axis=1)
+                W_loc = Wsec + (w * (res.device_outlet_W[:, covering] - Wsec[:, None])).sum(axis=1)
+                vc = np.array([model.devs[d].covered_air_speed for d in covering])[None, :] * on
+                v2 = v2 + (vc ** 2).sum(axis=1)
+                served = on.any(axis=1)
+            T_loc = psychro.t_from_hw(h_loc, W_loc)
+            rh_loc = psychro.rh_from_w(T_loc, W_loc, p) * 100
+            v_loc = np.sqrt(v2)
+            for state, share in (("sun", fsun), ("shade", 1 - fsun)):
+                tr = T_lw + d_dif + (d_dir if state == "sun" else 0)
+                strict = _set(T_loc, tr, v_loc, rh_loc, met, clo, p, posture, True)
+                ext = _set(T_loc, tr, v_loc, rh_loc, met, clo, p, posture, False)
+                in_ext = ((T_loc >= lim.tdb[0]) & (T_loc <= lim.tdb[1]) & (tr >= lim.tr[0]) & (tr <= lim.tr[1])
+                          & (v_loc >= lim.v[0]) & (v_loc <= lim.v[1]) & (rh_loc >= lim.rh[0]) & (rh_loc <= lim.rh[1]))
+                invalid = mid["invalid"][:, i] | ~np.isfinite(T_loc) | (rh_loc > 100.1)
+                cls = np.where(invalid, "unassessed_invalid_state",
+                               np.where(np.isfinite(strict), "supported",
+                                        np.where(np.isfinite(ext) & in_ext, "extrapolated", "unassessed_out_of_range")))
+                n_people = people * g.occupant_share * share
+                rows.append(pd.DataFrame(dict(
+                    k=np.arange(nk), t_h=mid["t"] / 3600.0, dt_h=mid["dt"] / 3600.0, section=sec.id, group=g.id,
+                    sun_state=state, people=n_people, person_hours=n_people * mid["dt"] / 3600.0,
+                    tdb=T_loc, rh_pct=rh_loc, v=v_loc, mrt=tr, set_strict=strict, set_extended=ext,
+                    cls=cls, served=served, met=met, clo=clo)))
+    df = pd.concat(rows, ignore_index=True)
+    basis = cfg.comfort.decision_basis
+    ok = (df["cls"] == "supported") | ((basis == "extended") & (df["cls"] == "extrapolated"))
+    df["et"] = np.where(ok, np.where(df["cls"] == "supported", df["set_strict"], df["set_extended"]), np.nan)
+    df["assessed"] = ok
+    return df
+
+
+===== FILE: venuecool/metrics.py =====
+"""Aggregation of local comfort results into section and whole-venue metrics.
+
+Definitions (per population-interval, computed locally *before* aggregation):
+  discomfort D = max(ET - target, 0)            [K]   ET = SET (decision basis)
+  burden       B = D * people * dt              [K * person-hours]  ("modeled person-equivalent-degree-hours")
+  person-hours = people * dt (NOT unique visitors; never multiplied by dwell time)
+
+Relief = baseline burden - intervention burden, evaluated on section-intervals assessed in
+*both* runs (matched). Negative relief is preserved. Ratios are formed only after summing
+numerators and denominators over the venue (no averaging of section ratios).
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+
+def crf(rate: float, years: float) -> float:
+    if years <= 0:
+        raise ValueError("lifetime must be positive")
+    if rate == 0:
+        return 1.0 / years
+    return rate * (1 + rate) ** years / ((1 + rate) ** years - 1)
+
+
+def section_intervals(df: pd.DataFrame, target: float) -> pd.DataFrame:
+    d = df.copy()
+    d["discomfort"] = np.maximum(d["et"] - target, 0.0)
+    d["burden"] = np.where(d["assessed"], d["discomfort"] * d["person_hours"], 0.0)
+    d["meet_ph"] = np.where(d["assessed"] & (d["et"] <= target), d["person_hours"], 0.0)
+    d["assessed_ph"] = np.where(d["assessed"], d["person_hours"], 0.0)
+    d["supported_ph"] = np.where(d["cls"] == "supported", d["person_hours"], 0.0)
+    d["extrapolated_ph"] = np.where(d["cls"] == "extrapolated", d["person_hours"], 0.0)
+    d["served_ph"] = np.where(d["served"], d["person_hours"], 0.0)
+    d["unassessed_pop"] = (~d["assessed"]) & (d["person_hours"] > 0)
+    g = d.groupby(["section", "k"], sort=False).agg(
+        t_h=("t_h", "first"), person_hours=("person_hours", "sum"), burden=("burden", "sum"),
+        meet_ph=("meet_ph", "sum"), assessed_ph=("assessed_ph", "sum"), supported_ph=("supported_ph", "sum"),
+        extrapolated_ph=("extrapolated_ph", "sum"), served_ph=("served_ph", "sum"),
+        any_unassessed=("unassessed_pop", "any"))
+    g["si_assessed"] = ~g["any_unassessed"]
+    return g.reset_index()
+
+
+def summarize(df: pd.DataFrame, cfg, target: float | None = None) -> dict:
+    target = cfg.comfort.target.value if target is None else float(target)
+    si = section_intervals(df, target)
+    out = {"sections": {}}
+
+    def agg(x):
+        occ = float(x["person_hours"].sum())
+        ass = float(x["assessed_ph"].sum())
+        meet = float(x["meet_ph"].sum())
+        return dict(occupied_person_hours=occ, assessed_person_hours=ass, unassessed_person_hours=occ - ass,
+                    supported_person_hours=float(x["supported_ph"].sum()),
+                    extrapolated_person_hours=float(x["extrapolated_ph"].sum()),
+                    served_person_hours=float(x["served_ph"].sum()),
+                    burden_Kph=float(x["burden"].sum()), meeting_person_hours=meet,
+                    attainment=(meet / ass) if ass > 0 else float("nan"),
+                    unassessed_fraction=((occ - ass) / occ) if occ > 0 else 0.0,
+                    burden_per_person_hour=(float(x["burden"].sum()) / ass) if ass > 0 else float("nan"))
+    for sid, x in si.groupby("section", sort=False):
+        out["sections"][sid] = agg(x)
+    out["venue"] = agg(si)
+    thr = cfg.comfort.poorly_served_attainment
+    out["poorly_served"] = [s for s, v in out["sections"].items()
+                            if v["occupied_person_hours"] > 0 and (np.isnan(v["attainment"]) or v["attainment"] < thr)]
+    out["_si"] = si
+    return out
+
+
+def ledger_totals(ledgers, passive, cfg, window_days: float) -> dict:
+    t = cfg.tariffs
+    scale = t.season_days.value / window_days
+    r = t.discount_rate.value
+    kwh = sum(x["electricity_kWh"] for x in ledgers)
+    water = sum(x["water_m3"] for x in ledgers)
+    e_cost = sum(x["electricity_cost_usd"] for x in ledgers)
+    w_cost = sum(x["water_cost_usd"] for x in ledgers)
+    cap = sum(x["capital_usd"] for x in ledgers) + sum(p.capital_cost.value for p in passive)
+    ann = sum(crf(r, x["lifetime_y"]) * x["capital_usd"] + x["maintenance_usd_y"] for x in ledgers)
+    ann += sum(crf(r, p.lifetime.value) * p.capital_cost.value + p.maintenance.value for p in passive)
+    peak_kw = sum(x["electric_power_kW"] for x in ledgers)
+    return dict(electricity_kWh=kwh, water_m3=water, energy_cost_usd=e_cost, water_cost_usd=w_cost,
+                investment_usd=cap, installed_kW=peak_kw,
+                season_scale=scale, season_electricity_kWh=kwh * scale, season_water_m3=water * scale,
+                season_operating_usd=(e_cost + w_cost) * scale, season_capital_and_maintenance_usd=ann,
+                season_total_cost_usd=(e_cost + w_cost) * scale + ann, n_devices=len(ledgers))
+
+
+def compare(base: dict, inter: dict, base_cost: dict, int_cost: dict) -> dict:
+    """Matched comparison of an intervention against the baseline (same weather/occupancy/draw)."""
+    a = base["_si"].set_index(["section", "k"]).add_suffix("_b")
+    b = inter["_si"].set_index(["section", "k"]).add_suffix("_i")
+    j = a.join(b, how="inner")
+    if not np.allclose(j["person_hours_b"], j["person_hours_i"], rtol=1e-9, atol=1e-9):
+        raise RuntimeError("baseline and intervention occupancy differ: comparison is not matched")
+    matched = j["si_assessed_b"] & j["si_assessed_i"]
+    relief_si = np.where(matched, j["burden_b"] - j["burden_i"], 0.0)
+    j = j.assign(relief=relief_si, matched=matched)
+    per = {}
+    for sid, x in j.groupby(level=0, sort=False):
+        per[sid] = dict(relief_Kph=float(x["relief"].sum()),
+                        baseline_burden_matched_Kph=float(np.where(x["matched"], x["burden_b"], 0).sum()),
+                        residual_burden_matched_Kph=float(np.where(x["matched"], x["burden_i"], 0).sum()),
+                        unmatched_person_hours=float(np.where(~x["matched"], x["person_hours_b"], 0).sum()))
+    relief = float(j["relief"].sum())
+    d_kwh = int_cost["electricity_kWh"] - base_cost["electricity_kWh"]
+    d_cost = int_cost["season_total_cost_usd"] - base_cost["season_total_cost_usd"]
+    scale = int_cost["season_scale"]
+    return dict(
+        relief_Kph=relief,
+        baseline_burden_matched_Kph=float(np.where(j["matched"], j["burden_b"], 0).sum()),
+        residual_burden_matched_Kph=float(np.where(j["matched"], j["burden_i"], 0).sum()),
+        unmatched_person_hours=float(np.where(~j["matched"], j["person_hours_b"], 0).sum()),
+        incremental_kWh=d_kwh, incremental_season_cost_usd=d_cost,
+        relief_per_kWh=(relief / d_kwh) if d_kwh > 1e-12 else float("nan"),
+        season_relief_Kph=relief * scale,
+        relief_per_usd=(relief * scale / d_cost) if d_cost > 1e-9 else float("nan"),
+        sections=per, worsened_sections=[s for s, v in per.items() if v["relief_Kph"] < -1e-9])

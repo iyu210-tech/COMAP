@@ -54,6 +54,9 @@ root.
 # CSV exports + Tair / RH / SET / cumulative-kWh graphs
 .venv/bin/python -m venuecool report examples/bus_shelter_single.yaml
 # assumptions: docs/ASSUMPTIONS_SINGLE_ZONE.md
+# airflow / solar / coverage bounds and SET targets 28, 30, 32 C
+.venv/bin/python -m venuecool robust examples/bus_shelter_single.yaml
+# what changed: docs/IMPROVEMENTS.md
 
 # baseline + every scenario in the config, with exports
 .venv/bin/python -m venuecool compare examples/bus_stop.yaml --weather examples/data/weather_hot_dry.csv
