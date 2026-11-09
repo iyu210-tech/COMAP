@@ -154,4 +154,44 @@ def write_robustness_figures(outdir, table: pd.DataFrame) -> Dict[str, Path]:
     p = outdir / "supported_vs_extrapolated.html"
     fig.write_html(str(p), include_plotlyjs="cdn")
     paths["supported_vs_extrapolated"] = p
+
+    if "per_kwh_scenario" in table.columns:
+        labels = table.drop_duplicates(["case", "target_C"])
+        fig = go.Figure()
+        for col, name in (("preferred_scenario", "greatest relief"),
+                          ("per_kwh_scenario", "relief per kWh"),
+                          ("min_energy_scenario", "min energy meeting target")):
+            if col not in labels.columns:
+                continue
+            fig.add_bar(name=name, x=[f"{c} @ {t:g}C" for c, t in zip(labels["case"], labels["target_C"])],
+                        y=[1] * len(labels), text=labels[col], textposition="inside")
+        fig.update_layout(barmode="group", template="plotly_white", showlegend=True,
+                          title="Which system each criterion selects (infeasible = none meet the attainment bar)",
+                          yaxis_visible=False, xaxis_title="Assumption and SET target")
+        fig.update_traces(hovertemplate="%{text}<extra></extra>")
+        p = outdir / "criteria_comparison.html"
+        fig.write_html(str(p), include_plotlyjs="cdn")
+        paths["criteria_comparison"] = p
+
+        nom30 = table[(table["case"] == table["case"].iloc[0]) & (np.isclose(table["target_C"], 30.0))]
+        if len(nom30):
+            fig = px.scatter(nom30, x="electricity_kWh", y="relief_Kph", text="scenario",
+                             color="on_pareto",
+                             title="Pareto comparison at nominal assumptions, 30 C SET target",
+                             labels={"electricity_kWh": "Electricity [kWh/day]",
+                                     "relief_Kph": "Relief [K person-h]", "on_pareto": "On Pareto front"})
+            fig.update_traces(textposition="top center")
+            fig.update_layout(template="plotly_white")
+            p = outdir / "pareto_relief_kwh.html"
+            fig.write_html(str(p), include_plotlyjs="cdn")
+            paths["pareto"] = p
+
+        fig = px.bar(nom, x="scenario", y="outside_applicability_fraction",
+                     title="Fraction of person-hours outside standard SET applicability (strict limits)",
+                     labels={"outside_applicability_fraction": "Fraction outside standard limits",
+                             "scenario": "Scenario"})
+        fig.update_layout(template="plotly_white", yaxis_range=[0, 1])
+        p = outdir / "applicability_fraction.html"
+        fig.write_html(str(p), include_plotlyjs="cdn")
+        paths["applicability_fraction"] = p
     return paths

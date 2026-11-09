@@ -26,7 +26,7 @@ from typing import Dict, List, Optional
 import numpy as np
 from scipy.integrate import solve_ivp
 
-from . import psychro, solar
+from . import comfort, psychro, solar
 from .airflow import make_airflow
 from .config import Schedule, VenueConfig, apply_device_overrides
 from .constants import MET_W_M2, SIGMA, T0K
@@ -525,6 +525,7 @@ class Model:
         sparsity = np.zeros((self.ny, self.ny))
         sparsity[:, :self.n_phys] = 1.0
         outs_t, outs_y = [], []
+        boundary_t, boundary_y = [], []
         n_rhs = [0]
         msg = "ok"
         ok = True
@@ -558,6 +559,9 @@ class Model:
                     outs_t.append(tt)
                     outs_y.append(sol.y[:, k].copy())
             y = sol.y[:, -1].copy()
+            if self.t0 - 1e-8 <= b <= self.t1 + 1e-8:
+                boundary_t.append(float(b))
+                boundary_y.append(y.copy())
             if not np.all(np.isfinite(y)):
                 ok, msg = False, f"non-finite state at {b/3600:.2f} h"
                 break
@@ -566,7 +570,8 @@ class Model:
         runtime = _time.perf_counter() - t_start
         if not ok or len(outs_t) < 2:
             return self._failed(msg, runtime, n_rhs[0])
-        return self._postprocess(np.array(outs_t), np.array(outs_y), y_t0, runtime, n_rhs[0])
+        return self._postprocess(np.array(outs_t), np.array(outs_y), y_t0, runtime, n_rhs[0],
+                                 boundary_t, boundary_y)
 
     def _failed(self, msg, runtime, nrhs):
         e = np.zeros((0, self.n))
@@ -580,7 +585,35 @@ class Model:
                 return N, on
         return self.segments[-1][2], self.segments[-1][3]
 
-    def _postprocess(self, t, Y, y_t0, runtime, nrhs) -> SimResult:
+    def _with_boundary_states(self, t, Y, boundary_t, boundary_y):
+        """Reporting samples plus the ODE state at off-grid segment boundaries.
+
+        A boundary is an operating-schedule, weather, occupancy or tariff edge of this
+        run. Inserting that state keeps later interpolation from crossing the switch.
+        Times already on the reporting grid are left as stored.
+        """
+        if not boundary_t:
+            return t, Y
+        have = {round(float(tt), 6) for tt in t}
+        extra_t, extra_y = [], []
+        for tt, yy in zip(boundary_t, boundary_y):
+            key = round(float(tt), 6)
+            if key in have or tt < self.t0 - 1e-8 or tt > self.t1 + 1e-8:
+                continue
+            have.add(key)
+            extra_t.append(float(tt))
+            extra_y.append(np.asarray(yy, float))
+        if not extra_t:
+            return t, Y
+        ts = np.concatenate([np.asarray(t, float), np.asarray(extra_t, float)])
+        ys = np.vstack([Y, np.asarray(extra_y, float)])
+        order = np.argsort(ts, kind="mergesort")
+        ts, ys = ts[order], ys[order]
+        keep = np.ones(len(ts), dtype=bool)
+        keep[1:] = np.diff(ts) > 1e-6
+        return ts[keep], ys[keep]
+
+    def _postprocess(self, t, Y, y_t0, runtime, nrhs, boundary_t, boundary_y) -> SimResult:
         n, nd = self.n, self.nd
         h, W, Tn = Y[:, self.i_h], Y[:, self.i_w], Y[:, self.i_T]
         T = psychro.t_from_hw(h, W)
@@ -599,16 +632,28 @@ class Model:
         if node_bad.any():
             for j in range(self.nn):
                 inv_mask[:, self.node_info[j]["sec"]] |= node_bad[:, j]
-        # interval midpoints
-        tm = 0.5 * (t[:-1] + t[1:])
-        hm, Wm = 0.5 * (h[:-1] + h[1:]), 0.5 * (W[:-1] + W[1:])
-        Tnm = 0.5 * (Tn[:-1] + Tn[1:])
+        # Comfort intervals use the reporting grid split at schedule edges. Off-grid
+        # segment boundaries keep the ODE state, so interpolation does not cross a
+        # switch. ``t`` / ``T_air`` stay on the reporting grid.
+        knots = comfort.metric_knots(self, t)
+        tb, Yb = self._with_boundary_states(t, Y, boundary_t, boundary_y)
+        hb, Wb, Tnb = Yb[:, self.i_h], Yb[:, self.i_w], Yb[:, self.i_T]
+        h_k = np.column_stack([np.interp(knots, tb, hb[:, i]) for i in range(n)])
+        W_k = np.column_stack([np.interp(knots, tb, Wb[:, i]) for i in range(n)])
+        Tn_k = np.column_stack([np.interp(knots, tb, Tnb[:, j]) for j in range(self.nn)])
+        left = np.clip(np.searchsorted(t, knots, side="right") - 1, 0, len(t) - 1)
+        right = np.clip(left + 1, 0, len(t) - 1)
+        inv_k = inv_mask[left] | inv_mask[right]
+        tm = 0.5 * (knots[:-1] + knots[1:])
+        hm, Wm = 0.5 * (h_k[:-1] + h_k[1:]), 0.5 * (W_k[:-1] + W_k[1:])
+        Tnm = 0.5 * (Tn_k[:-1] + Tn_k[1:])
         mid = {k: np.interp(tm, self.tg, self.drv[k]) for k in ("To", "Wo", "p", "U", "Tsky", "ghi", "dni", "dhi", "alt", "az", "hour")}
         mid["fsun"] = np.stack([np.interp(tm, self.tg, self.drv["fsun"][:, i]) for i in range(n)], axis=1)
-        mid.update(t=tm, dt=np.diff(t), h=hm, W=Wm, T_air=psychro.t_from_hw(hm, Wm), T_nodes=Tnm,
-                   invalid=(inv_mask[:-1] | inv_mask[1:]))
+        mid.update(t=tm, dt=np.diff(knots), h=hm, W=Wm, T_air=psychro.t_from_hw(hm, Wm), T_nodes=Tnm,
+                   invalid=(inv_k[:-1] | inv_k[1:]),
+                   knot_t=knots, knot_T_air=psychro.t_from_hw(h_k, W_k), knot_W=W_k)
         mid["people"] = np.array([[self.occ.person_seconds(c, float(self._wrap(a)), float(self._wrap(a)) + (b - a)) / (b - a)
-                                   for c in self.occ_cols] for a, b in zip(t[:-1], t[1:])])
+                                   for c in self.occ_cols] for a, b in zip(knots[:-1], knots[1:])])
         # device status and outlet states per interval
         on = np.zeros((len(tm), nd), bool)
         dh_o = np.zeros((len(tm), nd))

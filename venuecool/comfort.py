@@ -18,10 +18,20 @@ Local air in a covered group: h_loc = h_sec + sum_d w_d (h_out,d - h_sec) (same 
 total weight 1 - prod(1 - plume_d) split in proportion to plume_d (bounded by 1, no double
 counting). Local speed v = sqrt(v_base^2 + sum_d v_d^2).
 
-Classification of every population-interval:
+Classification of every population-interval (column ``applicability``):
   supported        SET finite with pythermalcomfort limit_inputs=True (ASHRAE 55 ranges)
   extrapolated     outside those ranges but inside the declared extended envelope (flagged)
   unassessed       invalid air state or outside the extended envelope
+
+``cls`` keeps the two unassessed reasons separate. A strict comparison across cooling
+alternatives keeps only person-intervals that are supported in every alternative, so the
+eligible hours do not change with the device. Extrapolated and unassessed hours stay in
+the class totals either way.
+
+Comfort intervals are the reporting grid split at every device-schedule, weather, occupancy
+and tariff edge (see ``metric_knots``). The air state at an operating-schedule boundary is
+the ODE solution at that time, not a chord drawn across the switch. The stored temperature
+series stays on the reporting grid.
 """
 
 from __future__ import annotations
@@ -30,6 +40,44 @@ import warnings
 from functools import lru_cache
 
 import numpy as np
+
+_DAY = 86400.0
+
+
+def metric_knots(model, t_report) -> np.ndarray:
+    """Reporting times plus edges shared by every scenario of this configuration.
+
+    Schedule edges of every configured device are included, whether or not that device
+    is on in this run, so baseline and intervention intervals stay aligned.
+    """
+    t0, t1 = float(model.t0), float(model.t1)
+    knots = {float(x) for x in np.asarray(t_report, float)}
+    for series in (model.wx.t_s, model.occ.t_s):
+        for tt in series:
+            x = float(tt)
+            if t0 < x < t1:
+                knots.add(x)
+    hours = []
+    for dev in model.cfg.devices:
+        for a, b in model.cfg.schedules[dev.schedule].intervals:
+            hours.extend((a, b))
+    for tou in model.cfg.tariffs.time_of_use:
+        hours.extend((tou.start_h, tou.end_h))
+    hours.extend(range(0, 25))
+    span = int(np.ceil((t1 - t0) / _DAY)) + 1
+    for d0 in range(0, span + 1):
+        for hh in hours:
+            x = d0 * _DAY + float(hh) * 3600.0
+            if t0 < x < t1:
+                knots.add(x)
+    knots.update((t0, t1))
+    arr = np.array(sorted(knots), float)
+    keep = [arr[0]]
+    for x in arr[1:]:
+        if x - keep[-1] > 1e-6:
+            keep.append(x)
+    return np.array(keep, float)
+
 import pandas as pd
 
 from . import psychro
@@ -164,6 +212,9 @@ def evaluate(cfg, model, res) -> pd.DataFrame:
                     cls=cls, served=served, met=met, clo=clo)))
     df = pd.concat(rows, ignore_index=True)
     basis = cfg.comfort.decision_basis
+    df["applicability"] = np.where(
+        df["cls"] == "supported", "supported",
+        np.where(df["cls"] == "extrapolated", "extrapolated", "unassessed"))
     ok = (df["cls"] == "supported") | ((basis == "extended") & (df["cls"] == "extrapolated"))
     df["et"] = np.where(ok, np.where(df["cls"] == "supported", df["set_strict"], df["set_extended"]), np.nan)
     df["assessed"] = ok

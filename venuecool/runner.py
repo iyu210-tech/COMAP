@@ -151,21 +151,29 @@ def _clean(o):
 
 
 def cumulative_electricity_kWh(o: Outcome) -> np.ndarray:
-    """Cumulative electricity [kWh] at each output sample time (midpoint quadrature of on × power)."""
+    """Cumulative electricity [kWh] at each reporting time, using exact segment on-intervals.
+
+    A device that switches between two reporting samples contributes only its real on-time.
+    The value at the last reporting time matches the device ledger.
+    """
     s = o.sim
-    n_t = len(s.t)
-    cum = np.zeros(n_t)
-    if s.device_on.size == 0 or not o.model.devs:
+    cum = np.zeros(len(s.t))
+    if not o.model.devs:
         return cum
-    powers_kW = np.array([d.power_W for d in o.model.devs], float) / 1000.0
-    # device_on / mid["dt"] align with intervals between consecutive output times
-    dt_h = np.diff(s.t) / 3600.0
-    n_int = min(len(dt_h), s.device_on.shape[0])
-    rate = (s.device_on[:n_int].astype(float) * powers_kW[None, :]).sum(axis=1)  # kW
-    incr = rate * dt_h[:n_int]  # kWh
-    cum[1:n_int + 1] = np.cumsum(incr)
-    if n_int + 1 < n_t:
-        cum[n_int + 1:] = cum[n_int]
+    pieces = []
+    t0, t1 = o.model.t0, o.model.t1
+    for a, b, _N, on in o.model.segments:
+        if b <= t0 or a >= t1 or not np.any(on):
+            continue
+        kw = sum(dev.power_W / 1000.0 for d, dev in enumerate(o.model.devs) if on[d])
+        pieces.append((max(a, t0), min(b, t1), kw))
+    for i, ti in enumerate(s.t):
+        e = 0.0
+        for lo, hi, kw in pieces:
+            overlap = min(hi, float(ti)) - lo
+            if overlap > 0:
+                e += kw * overlap / 3600.0
+        cum[i] = e
     return cum
 
 

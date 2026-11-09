@@ -43,6 +43,61 @@ def section_intervals(df: pd.DataFrame, target: float) -> pd.DataFrame:
     return g.reset_index()
 
 
+def applicability_hours(df: pd.DataFrame) -> dict:
+    """Person-hours in each SET class. Independent of the decision basis.
+
+    The three values partition occupied person-hours: supported, extrapolated, unassessed.
+    """
+    ph = df["person_hours"].to_numpy(float)
+    if "applicability" in df.columns:
+        lab = df["applicability"].astype(str).to_numpy()
+    else:
+        cls = df["cls"].astype(str).to_numpy()
+        lab = np.where(cls == "supported", "supported",
+                       np.where(cls == "extrapolated", "extrapolated", "unassessed"))
+    return {name: float(ph[lab == name].sum()) for name in ("supported", "extrapolated", "unassessed")}
+
+
+def _interval_key(df: pd.DataFrame) -> pd.MultiIndex:
+    return pd.MultiIndex.from_arrays([
+        df["section"].to_numpy(),
+        df["group"].to_numpy(),
+        df["sun_state"].to_numpy(),
+        np.round(df["t_h"].to_numpy(float), 6),
+    ])
+
+
+def common_supported_frames(frames: dict) -> dict:
+    """Copy frames so only person-intervals supported in every frame stay assessed.
+
+    ``cls``, ``applicability`` and ``set_strict`` are unchanged. ``et`` is the strict SET
+    on the shared intervals and missing elsewhere. Strict relief and attainment computed
+    from the copies therefore use the same eligible person-hours for every alternative.
+    """
+    if not frames:
+        return {}
+    keys = {name: _interval_key(df) for name, df in frames.items()}
+    common = None
+    for name, df in frames.items():
+        if "applicability" in df.columns:
+            lab = df["applicability"].astype(str).to_numpy()
+        else:
+            cls = df["cls"].astype(str).to_numpy()
+            lab = np.where(cls == "supported", "supported",
+                           np.where(cls == "extrapolated", "extrapolated", "unassessed"))
+        supported = keys[name][lab == "supported"]
+        common = supported if common is None else common.intersection(supported)
+    out = {}
+    for name, df in frames.items():
+        d = df.copy()
+        ok = keys[name].isin(common)
+        d["assessed"] = ok
+        strict = d["set_strict"].to_numpy(float) if "set_strict" in d.columns else d["et"].to_numpy(float)
+        d["et"] = np.where(ok, strict, np.nan)
+        out[name] = d
+    return out
+
+
 def summarize(df: pd.DataFrame, cfg, target: float | None = None) -> dict:
     target = cfg.comfort.target.value if target is None else float(target)
     si = section_intervals(df, target)
@@ -63,6 +118,7 @@ def summarize(df: pd.DataFrame, cfg, target: float | None = None) -> dict:
     for sid, x in si.groupby("section", sort=False):
         out["sections"][sid] = agg(x)
     out["venue"] = agg(si)
+    out["applicability_person_hours"] = applicability_hours(df)
     thr = cfg.comfort.poorly_served_attainment
     out["poorly_served"] = [s for s, v in out["sections"].items()
                             if v["occupied_person_hours"] > 0 and (np.isnan(v["attainment"]) or v["attainment"] < thr)]

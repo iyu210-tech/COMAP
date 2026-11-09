@@ -67,3 +67,78 @@ every cell: airflow, solar, coverage, and all three SET targets. Relief itself m
 more outdoor air and a tighter canopy reduce it. Supported and extrapolated person-hours
 trade off with those same assumptions (more sun shifts hours into the extrapolated class)
 and do not change when only the SET target changes.
+
+## 4. Event-aware comfort and electricity
+
+The reporting series (air temperature, humidity) stays on `output_step_s`. Comfort intervals
+and cumulative kWh are split at schedule, weather, occupancy and tariff edges, including
+edges that fall between reporting samples. The moist-air state at an operating-schedule
+boundary is the ODE solution at that time. States are interpolated only between samples that
+do not contain a switch. Cumulative electricity at the end of the day matches the device
+ledger. `test_event_metrics_match_ledger_and_fine_comfort` checks the ledger and a 60 s
+comfort reference. `test_boundary_state_converges_to_fine_grid` checks the off-grid switch
+state against 60 s and 30 s solutions.
+
+## 5. Three rankings, Pareto, and SET applicability
+
+`venuecool robust` now reports, for each assumption and each SET target:
+
+* greatest total relief
+* greatest relief per kWh
+* lowest electricity among systems with attainment at least 0.60, including the uncooled
+  baseline (otherwise `infeasible`)
+* the Pareto set in the relief–kWh plane
+
+Relief per kWh ignores interventions whose relief is not positive. Supported, extrapolated
+and unassessed person-hours are counted separately. `outside_applicability_fraction` is the
+share of person-hours outside the standard SET input limits. Strict rankings use only the
+person-intervals that are supported in every alternative, so each device is scored on the
+same hours. `conclusion_changes_if_strict` is true only when the strict-only relief winner
+is a different system and leads the next system by more than 1 K·person-h. A near-tie is
+not counted as a new ranking. `extrapolation_heavy` is true when that greatest-relief claim
+keeps less than half of its relief on the shared supported hours.
+
+On the hot/dry nominal day at a 30 °C target, about 52–68% of person-hours fall outside the
+standard SET limits (68% for the shelter and the fan, 61% for the 1.2 kW cooler, 52% for
+the 2.5 kW cooler). There are no unassessed person-hours. The 2.5 kW cooler has the most
+relief (140 K·person-h) but the least relief per kWh (3.5, against 8.3 for the fan). The
+least electricity that still reaches 60% attainment is the 1.2 kW cooler (19.2 kWh). All
+four options, including the baseline, sit on the Pareto front. The hours supported in every
+alternative are 21.9 person-hours, and the strict relief on those hours is 0.03 K·person-h
+for every device. The extended-basis ranking is therefore extrapolation-heavy, and the
+strict relief gap is 0.
+
+That pattern holds for all 21 assumption-by-target cells: `extrapolation_heavy` is true and
+`conclusion_changes_if_strict` is false. The earlier high-coverage, 28 °C result, in which
+the 1.2 kW cooler appeared to lead on its own supported hours, does not survive once every
+device is scored on the shared 11.7 person-hours. One cell changes the minimum-energy
+choice once the baseline is included: low solar at 32 °C, where the uncooled shelter already
+reaches about 70% attainment, so the minimum-energy strategy is to add no cooling. No cell
+is infeasible at the 0.60 bar.
+
+Equipment inputs are labelled in `equipment_evidence.csv`:
+
+| evidence | meaning in this project |
+|---|---|
+| published | supplied by the problem statement (the three electrical draws) |
+| assumed | DEMO-ASSUMPTION airflow, effectiveness, plume fraction, coverage speed |
+| measured | not used; no metered equipment data were available |
+
+## 6. Boundary states, shared strict hours, and the baseline
+
+Three corrections, without new rankings:
+
+* Off-grid schedule boundaries store the ODE state from the segment endpoint. The reporting
+  grid is unchanged. On the mini venue, the state at a switch 1260 s into a 600 s grid matches
+  a 30 s reference within 0.05 °C and 2×10⁻⁵ kg/kg.
+* Strict relief and attainment use the person-intervals supported for every alternative.
+  Each scenario still reports its own supported, extrapolated and unassessed person-hours.
+  `extrapolation_heavy` marks a greatest-relief claim that loses more than half of its relief
+  on that shared set.
+* Minimum energy includes the uncooled baseline. Relief per kWh skips nonpositive relief and
+  selects the baseline when every device fails to reduce the burden.
+
+The single-zone hot/dry report is unchanged at the published precision: baseline attainment
+0.278 and burden 161.8 K·person-h; fan relief 33.3 K·person-h and 4.0 kWh; 1.2 kW cooler
+relief 111.2 and 19.2 kWh; 2.5 kW cooler relief 139.6 and 40.0 kWh. Service-hour edges fall
+on the 300 s reporting grid, so the boundary-state correction does not move those totals.

@@ -1,117 +1,232 @@
 {
-  "definition": "preferred = intervention with the largest matched relief; baseline if all relief <= 0",
+  "attainment_bar": 0.6,
+  "rankings": [
+    "greatest_relief",
+    "relief_per_kWh",
+    "min_energy_meeting_target"
+  ],
   "targets_C": [
     28.0,
     30.0,
     32.0
   ],
-  "preferred_changes": false,
+  "greatest_relief_changes": false,
   "winners": [
     {
       "case": "airflow_high",
       "target_C": 28.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "C_large_evap",
+      "strict_preferred_scenario": "B_evap",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "airflow_high",
       "target_C": 30.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "B_evap",
+      "strict_preferred_scenario": "A_fan",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "airflow_high",
       "target_C": 32.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "A_fan",
+      "strict_preferred_scenario": "baseline",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "airflow_low",
       "target_C": 28.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "B_evap",
+      "min_energy_scenario": "B_evap",
+      "strict_preferred_scenario": "B_evap",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "airflow_low",
       "target_C": 30.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "B_evap",
+      "strict_preferred_scenario": "A_fan",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "airflow_low",
       "target_C": 32.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "A_fan",
+      "strict_preferred_scenario": "baseline",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "coverage_high",
       "target_C": 28.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "B_evap",
+      "strict_preferred_scenario": "B_evap",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "coverage_high",
       "target_C": 30.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "B_evap",
+      "strict_preferred_scenario": "baseline",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "coverage_high",
       "target_C": 32.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "A_fan",
+      "strict_preferred_scenario": "baseline",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "coverage_low",
       "target_C": 28.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "B_evap",
+      "min_energy_scenario": "C_large_evap",
+      "strict_preferred_scenario": "B_evap",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "coverage_low",
       "target_C": 30.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "B_evap",
+      "min_energy_scenario": "B_evap",
+      "strict_preferred_scenario": "A_fan",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "coverage_low",
       "target_C": 32.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "B_evap",
+      "strict_preferred_scenario": "baseline",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "nominal",
       "target_C": 28.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "C_large_evap",
+      "strict_preferred_scenario": "B_evap",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "nominal",
       "target_C": 30.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "B_evap",
+      "strict_preferred_scenario": "A_fan",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "nominal",
       "target_C": 32.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "A_fan",
+      "strict_preferred_scenario": "baseline",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "solar_high",
       "target_C": 28.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "C_large_evap",
+      "strict_preferred_scenario": "B_evap",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "solar_high",
       "target_C": 30.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "B_evap",
+      "strict_preferred_scenario": "A_fan",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "solar_high",
       "target_C": 32.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "B_evap",
+      "strict_preferred_scenario": "baseline",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "solar_low",
       "target_C": 28.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "B_evap",
+      "min_energy_scenario": "B_evap",
+      "strict_preferred_scenario": "B_evap",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "solar_low",
       "target_C": 30.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "B_evap",
+      "strict_preferred_scenario": "baseline",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     },
     {
       "case": "solar_low",
       "target_C": 32.0,
-      "preferred_scenario": "C_large_evap"
+      "preferred_scenario": "C_large_evap",
+      "per_kwh_scenario": "A_fan",
+      "min_energy_scenario": "baseline",
+      "strict_preferred_scenario": "baseline",
+      "conclusion_changes_if_strict": false,
+      "extrapolation_heavy": true
     }
   ],
-  "note": "supported_person_hours and extrapolated_person_hours do not depend on the SET target. They count comfort evaluations inside strict ASHRAE 55 input limits vs the declared extended envelope. Weather and occupancy remain SYNTHETIC_DEMONSTRATION."
+  "evidence_counts": {
+    "assumed": 14,
+    "published": 3
+  },
+  "any_measured_equipment_input": false,
+  "note": "Electric power is published (problem statement). Airflow, effectiveness, plume fraction and coverage speed are assumed. No equipment input is measured. supported, extrapolated and unassessed person-hours are separate. strict_* rankings use only person-intervals supported in every alternative. extrapolation_heavy means the greatest-relief claim keeps less than half of its relief on those shared hours. Min-energy includes the uncooled baseline. Relief per kWh ignores nonpositive relief. Weather and occupancy remain SYNTHETIC_DEMONSTRATION."
 }

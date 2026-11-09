@@ -1,0 +1,18 @@
+preset,field,value,unit,evidence,source
+fan_system,electric_power,250.0,W,published,SUPPLIED: problem statement table [converted from kW]
+fan_system,airflow,2.5,m3/s,assumed,"DEMO-ASSUMPTION: two ~0.6 m pedestal/wall fans, ~4500 m3/h each"
+fan_system,covered_air_speed,1.3,m/s,assumed,"DEMO-ASSUMPTION: mean occupant-level jet speed in covered zone; chosen so the SET reduction at the warm_moderate reference (32 C, 40% RH, still air 0.2 m/s) is ~3 K (`venuecool calibrate`)"
+fan_system,plume_fraction,0.0,-,assumed,fan delivers section air (no process); local air = section air
+fan_system,bleed_fraction,0.0,-,assumed,default: none
+evaporative_cooler,electric_power,1200.0,W,published,SUPPLIED: problem statement table [converted from kW]
+evaporative_cooler,airflow,3.0,m3/s,assumed,DEMO-ASSUMPTION: portable direct evaporative unit ~11000 m3/h
+evaporative_cooler,covered_air_speed,1.0,m/s,assumed,DEMO-ASSUMPTION: supply-jet speed at occupants in covered zone
+evaporative_cooler,saturation_effectiveness,0.75,-,assumed,DEMO-ASSUMPTION: 100 mm cellulose media at rated face velocity
+evaporative_cooler,plume_fraction,0.25,-,assumed,DEMO-ASSUMPTION: share of supply air in the air breathed in the covered zone (replace with CFD/measurement)
+evaporative_cooler,bleed_fraction,0.15,-,assumed,DEMO-ASSUMPTION: bleed-off water per unit evaporated
+large_evaporative_cooler,electric_power,2500.0,W,published,SUPPLIED: problem statement table [converted from kW]
+large_evaporative_cooler,airflow,6.0,m3/s,assumed,DEMO-ASSUMPTION: large ducted/portable unit ~22000 m3/h
+large_evaporative_cooler,covered_air_speed,1.3,m/s,assumed,DEMO-ASSUMPTION
+large_evaporative_cooler,saturation_effectiveness,0.82,-,assumed,DEMO-ASSUMPTION: 150-200 mm rigid media
+large_evaporative_cooler,plume_fraction,0.35,-,assumed,"DEMO-ASSUMPTION: larger jet, larger share of supply air in the covered zone"
+large_evaporative_cooler,bleed_fraction,0.15,-,assumed,DEMO-ASSUMPTION

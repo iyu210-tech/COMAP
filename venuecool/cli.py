@@ -109,11 +109,11 @@ def cmd_robust(args):
     s = _study(args)
     out = _default_out(args, "robustness")
     df = run_robustness(s, out)
-    winners = df[df["preferred"]][["case", "target_C", "preferred_scenario", "relief_Kph",
-                                   "supported_person_hours", "extrapolated_person_hours"]]
-    with pd.option_context("display.width", 200, "display.max_columns", 20):
-        print(winners.round(3).to_string(index=False))
-    print(f"preferred system changes across the table: {df.loc[df.preferred, 'preferred_scenario'].nunique() > 1}")
+    winners = df.drop_duplicates(["case", "target_C"])[
+        ["case", "target_C", "preferred_scenario", "per_kwh_scenario", "min_energy_scenario",
+         "strict_preferred_scenario", "conclusion_changes_if_strict", "extrapolation_heavy"]]
+    with pd.option_context("display.width", 220, "display.max_columns", 20):
+        print(winners.to_string(index=False))
     print(f"wrote {out}")
 
 

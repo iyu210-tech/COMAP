@@ -199,6 +199,84 @@ def test_offgrid_schedule_matches_fine_grid(mini_raw):
     assert np.all(np.diff(coarse.sim.t) == pytest.approx(600.0))
 
 
+def test_event_metrics_match_ledger_and_fine_comfort(mini_raw):
+    """Off-grid switching: cumulative kWh matches the ledger, and comfort matches a fine grid."""
+    from venuecool.runner import cumulative_electricity_kWh
+
+    def prepare(r, step):
+        r["simulation"]["warmup_days"] = 0
+        r["simulation"]["end_h"] = 2
+        r["simulation"]["output_step_s"] = step
+        r["simulation"]["rtol"] = 1e-7
+        r["schedules"]["offgrid"] = {"mode": "hours", "intervals": [[0.0, 0.35]]}
+        for d in r["devices"]:
+            if d["id"] == "evap_out":
+                d["schedule"] = "offgrid"
+    coarse = study_with(mini_raw, lambda r: prepare(r, 600.0)).run(["evap_out"], label="coarse")
+    fine = study_with(mini_raw, lambda r: prepare(r, 60.0)).run(["evap_out"], label="fine")
+    ledger = sum(x["electricity_kWh"] for x in coarse.sim.ledgers)
+    cum = cumulative_electricity_kWh(coarse)
+    assert cum[-1] == pytest.approx(ledger, rel=1e-9, abs=1e-9)
+    assert cum[0] == pytest.approx(0.0)
+    # 1260 s is not a reporting sample. Comfort splits 1200-1800 into 60 s on and 540 s off.
+    assert not any(abs(tt - 1260.0) < 1e-6 for tt in coarse.sim.t)
+    dt = coarse.sim.mid["dt"]
+    on = coarse.sim.device_on[:, 0]
+    assert np.any(np.isclose(dt, 60.0) & on)
+    assert np.any(np.isclose(dt, 540.0) & ~on)
+    assert np.all(np.diff(coarse.sim.t) == pytest.approx(600.0))
+    assert coarse.summary["venue"]["occupied_person_hours"] == pytest.approx(
+        fine.summary["venue"]["occupied_person_hours"], rel=1e-6)
+    assert coarse.summary["venue"]["burden_Kph"] == pytest.approx(
+        fine.summary["venue"]["burden_Kph"], rel=0.05, abs=0.5)
+
+
+def test_boundary_state_converges_to_fine_grid(mini_raw):
+    """The state at an off-grid switch is the ODE value, and it converges as the grid is refined."""
+    def prepare(r, step):
+        r["simulation"]["warmup_days"] = 0
+        r["simulation"]["end_h"] = 2
+        r["simulation"]["output_step_s"] = step
+        r["simulation"]["rtol"] = 1e-7
+        r["schedules"]["offgrid"] = {"mode": "hours", "intervals": [[0.0, 0.35]]}
+        for d in r["devices"]:
+            if d["id"] == "evap_out":
+                d["schedule"] = "offgrid"
+
+    coarse = study_with(mini_raw, lambda r: prepare(r, 600.0)).run(["evap_out"], label="coarse")
+    mid = study_with(mini_raw, lambda r: prepare(r, 60.0)).run(["evap_out"], label="mid")
+    fine = study_with(mini_raw, lambda r: prepare(r, 30.0)).run(["evap_out"], label="fine")
+    assert np.all(np.diff(coarse.sim.t) == pytest.approx(600.0))
+    assert not any(abs(tt - 1260.0) < 1e-6 for tt in coarse.sim.t)
+
+    def knot_state(sim, t):
+        i = int(np.argmin(np.abs(sim.mid["knot_t"] - t)))
+        assert abs(float(sim.mid["knot_t"][i]) - t) < 1e-6
+        return float(sim.mid["knot_T_air"][i, 0]), float(sim.mid["knot_W"][i, 0])
+
+    def report_state(sim, t):
+        i = int(np.argmin(np.abs(sim.t - t)))
+        assert abs(float(sim.t[i]) - t) < 1.0
+        return float(sim.T_air[i, 0]), float(sim.W[i, 0])
+
+    t_k, w_k = knot_state(coarse.sim, 1260.0)
+    t_fine, w_fine = report_state(fine.sim, 1260.0)
+    t_mid, w_mid = report_state(mid.sim, 1260.0)
+    t0, w0 = report_state(coarse.sim, 1200.0)
+    t1, w1 = report_state(coarse.sim, 1800.0)
+    frac = (1260.0 - 1200.0) / (1800.0 - 1200.0)
+    t_lin = t0 + frac * (t1 - t0)
+    w_lin = w0 + frac * (w1 - w0)
+    # The stored boundary state matches the refined solution, and refining further does not move it.
+    assert t_k == pytest.approx(t_fine, abs=0.05)
+    assert w_k == pytest.approx(w_fine, abs=2e-5)
+    assert t_mid == pytest.approx(t_fine, abs=0.02)
+    assert abs(t_k - t_fine) < abs(t_lin - t_fine) or abs(w_k - w_fine) < abs(w_lin - w_fine)
+    # Comfort on the coarse grid agrees with the fine grid once the boundary state is exact.
+    assert coarse.summary["venue"]["burden_Kph"] == pytest.approx(
+        fine.summary["venue"]["burden_Kph"], rel=0.05, abs=0.5)
+
+
 def test_numerical_refinement(mini_raw):
     from venuecool.runner import Study
     res = {}

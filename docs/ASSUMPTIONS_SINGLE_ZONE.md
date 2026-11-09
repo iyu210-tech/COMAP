@@ -33,6 +33,16 @@ Parametric form \(Q = Q_{\min} + C_w A_{\mathrm{open}} U_{10}\) (no CFD):
 | Min flow | 0.5 m³/s | Calm-condition floor |
 | Local wind factor | 0.35 | Occupant-level speed / 10 m wind under a roof |
 
+## Evidence classes for equipment inputs
+
+| class | what it means here |
+|---|---|
+| published | the problem statement supplies the electrical draw (0.25, 1.2, 2.5 kW) |
+| assumed | airflow, pad effectiveness, plume fraction, coverage speed, bleed (DEMO-ASSUMPTION) |
+| measured | none — no metered airflow, power or water data are in this project |
+
+`venuecool robust` writes this split to `equipment_evidence.csv`.
+
 ## Equipment (airflow and coverage — not supplied by the problem)
 
 The problem gives electrical draw and qualitative claims ("feels up to 3 °C", "up to 5 / 8 °C").
