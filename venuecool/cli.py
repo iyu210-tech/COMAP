@@ -8,6 +8,7 @@
     venuecool benchmark  CONFIG [--runs N] [--workers 1,4,11]
     venuecool calibrate  CONFIG [--out DIR]
     venuecool refine     CONFIG [--scenario ID]
+    venuecool report     CONFIG [--weather CSV] [--scenarios a,b] [--out DIR]
     venuecool examples   [--out DIR]          # every example x both synthetic climates
 """
 
@@ -70,6 +71,35 @@ def cmd_compare(args):
     with pd.option_context("display.width", 200, "display.max_columns", 20):
         print(df[[c for c in cols if c in df]].round(3).to_string(index=False))
     print(f"[{s.cfg0.meta.data_status}] wrote {out}  ({time.perf_counter() - t:.1f} s)")
+
+
+def cmd_report(args):
+    """Run the four Problem B scenarios and write Tair / RH / SET / cumulative-kWh graphs."""
+    from .plots import write_report
+    from .runner import comparison_rows, export
+    s = _study(args)
+    scen = args.scenarios.split(",") if args.scenarios else ["A_fan", "B_evap", "C_large_evap"]
+    t = time.perf_counter()
+    outs, comps = s.compare_all(scen)
+    report_override = args.out
+    args.out = None  # CSVs stay under the standard compare/ folder
+    compare_dir = _default_out(args, "compare")
+    export(outs, comps, s, compare_dir)
+    df = comparison_rows(outs, comps)
+    args.out = report_override
+    report_dir = Path(report_override) if report_override else _default_out(args, "report")
+    # reuse exported frames so graphs match the CSV archive
+    ts = pd.read_csv(compare_dir / "timeseries.csv")
+    cf = pd.read_csv(compare_dir / "comfort_populations.csv")
+    paths = write_report(report_dir, ts, cf, df)
+    cols = ["scenario", "attainment", "burden_Kph", "relief_Kph", "electricity_kWh", "water_m3"]
+    with pd.option_context("display.width", 200, "display.max_columns", 20):
+        print(df[[c for c in cols if c in df]].round(3).to_string(index=False))
+    print(f"[{s.cfg0.meta.data_status}] compare -> {compare_dir}")
+    print(f"report graphs -> {report_dir}")
+    for name, p in paths.items():
+        print(f"  {name}: {p}")
+    print(f"({time.perf_counter() - t:.1f} s)")
 
 
 def cmd_search(args):
@@ -221,6 +251,10 @@ def main(argv=None):
     add("validate", cmd_validate)
     sp = add("compare", cmd_compare)
     sp.add_argument("--scenarios", default=None)
+    sp = add("report", cmd_report)
+    sp.add_argument("--scenarios", default=None,
+                    help="comma-separated interventions (baseline always included); "
+                         "default A_fan,B_evap,C_large_evap")
     sp = add("search", cmd_search)
     sp.add_argument("--workers", type=int, default=None)
     sp.add_argument("--limit", type=int, default=None)

@@ -50,6 +50,11 @@ root.
 # validate a configuration and print the provenance of every quantity
 .venv/bin/python -m venuecool validate examples/bus_stop.yaml
 
+# single-zone Problem B slice: one shelter, baseline + fan + two evaporative coolers,
+# CSV exports + Tair / RH / SET / cumulative-kWh graphs
+.venv/bin/python -m venuecool report examples/bus_shelter_single.yaml
+# assumptions: docs/ASSUMPTIONS_SINGLE_ZONE.md
+
 # baseline + every scenario in the config, with exports
 .venv/bin/python -m venuecool compare examples/bus_stop.yaml --weather examples/data/weather_hot_dry.csv
 
@@ -88,7 +93,8 @@ uncertainty results from the same place.
 |---|---|
 | `venuecool/` | the engine; one module per concern (see table below) |
 | `app/dashboard.py` | Streamlit + Plotly dashboard |
-| `examples/*.yaml` | bus stop, semi-open rail station, three-section venue |
+| `examples/*.yaml` | single-zone bus shelter, two-section bus stop, rail station, three-section venue |
+| `docs/ASSUMPTIONS_SINGLE_ZONE.md` | labelled DEMO-ASSUMPTIONS for the single-zone Problem B slice |
 | `examples/common/` | shared physics, materials, tariffs, device presets, section templates |
 | `examples/data/` | synthetic weather (hot/dry, warm/humid) and occupancy CSVs |
 | `tests/` | software and physics checks with a small two-section test venue |
